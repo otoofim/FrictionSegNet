@@ -9,13 +9,35 @@ from PIL import Image
 import numpy as np
 import torch
 from os.path import join
-
-
 import random
 
 
 def prepareAugFuncs(imgSize):
+    """Prepares a dictionary of image augmentation functions.
 
+    Creates a set of image transformation functions using torchvision transforms
+    for data augmentation during training. Each function applies different types
+    of augmentation like cropping, color jittering, blurring etc.
+
+    Args:
+        imgSize (tuple): Target size for the transformed images as (height, width).
+
+    Returns:
+        dict: A dictionary mapping augmentation names to their corresponding
+            transform functions. Available augmentations include:
+            - org: Basic resizing
+            - crop: Center cropping
+            - grayScale: Grayscale conversion
+            - colorJitter: Random color adjustments
+            - gaussianBlur: Gaussian blurring
+            - rotation: Random rotation
+            - elastic: Elastic transformation
+            - invert: Color inversion
+            - solarize: Image solarization
+            - augMix: AugMix augmentation
+            - posterize: Color posterization
+            - erasing: Random erasing
+    """
     return {
         "org": T.Compose(
             [
@@ -118,9 +140,32 @@ def prepareAugFuncs(imgSize):
 
 
 class volvo_onFly(GenericDataLoader):
+    """Custom data loader for Volvo dataset with on-the-fly augmentations.
+
+    This class implements a PyTorch dataset for loading and preprocessing Volvo
+    image data with segmentation masks. It supports various image augmentations
+    that are applied during runtime.
+
+    Args:
+        **kwargs: Keyword arguments including:
+            volvoRootPath (str): Root directory containing the dataset.
+            mode (str): Operating mode ('train', 'val', or 'test').
+            input_img_dim (tuple): Desired dimensions for input images.
+
+    Attributes:
+        datasetRootPath (str): Path to the dataset root directory.
+        mode (str): Current operating mode.
+        imgSize (tuple): Target image dimensions.
+        imgNamesList (list): List of image file paths.
+        augmenters (dict): Dictionary of augmentation functions.
+        labels (dict): Mapping of category names to colors.
+        NewColors (dict): Predefined color mappings from volvoData.
+        transform_in (transforms.Compose): Input image transformation pipeline.
+        transform_ou (transforms.Compose): Output mask transformation pipeline.
+    """
 
     def __init__(self, **kwargs):
-
+        """Initializes the volvo_onFly dataset."""
         super().__init__(**kwargs)
 
         self.datasetRootPath = kwargs["volvoRootPath"]
@@ -140,31 +185,50 @@ class volvo_onFly(GenericDataLoader):
         self.labels = labels
         self.NewColors = volvoData
 
-        self.transform_in = preprocess_in = transforms.Compose(
+        self.transform_in = transforms.Compose(
             [
                 transforms.ToTensor(),
                 transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
                 transforms.Resize(self.imgSize),
             ]
         )
-        self.transform_ou = preprocess_out = transforms.Compose(
-            [
-                # transforms.ToTensor(),
-                transforms.Resize(self.imgSize)
-            ]
-        )
+        self.transform_ou = transforms.Compose([transforms.Resize(self.imgSize)])
 
     def __len__(self):
+        """Returns the total number of samples in the dataset.
+
+        The total count is the product of number of images and number of
+        augmentations, as each image will be augmented in multiple ways.
+
+        Returns:
+            int: Total number of samples.
+        """
         return len(self.imgNamesList) * len(self.augmenters.keys())
 
     def get_num_classes(self):
+        """Returns the number of classes in the dataset.
+
+        Returns:
+            int: Number of classes (either reduced categories or full label set).
+        """
         if self.reducedCategories:
             return len(self.reducedCategoriesColors)
         else:
             return len(self.labels)
 
     def __getitem__(self, idx):
+        """Retrieves a single sample from the dataset.
 
+        Args:
+            idx (int): Index of the sample to retrieve.
+
+        Returns:
+            dict: A dictionary containing:
+                - image: Transformed input image tensor
+                - label: Segmentation mask tensor
+                - seg: Colored segmentation mask tensor
+                - FriLabel: Friction label tensor
+        """
         org_img, seg_mask, seg_color = self.generateSample(idx)
 
         seg_mask, seg_color, fricLabel = self.create_prob_mask(
@@ -188,7 +252,25 @@ class volvo_onFly(GenericDataLoader):
         }
 
     def generateSample(self, idx):
+        """Generates an augmented sample from the dataset.
 
+        This method loads an image and its corresponding masks, then applies
+        the appropriate augmentation based on the index.
+
+        Args:
+            idx (int): Index of the sample to generate.
+
+        Returns:
+            tuple: Contains:
+                - PIL.Image: Augmented input image
+                - PIL.Image: Augmented segmentation mask
+                - PIL.Image: Augmented colored segmentation mask
+
+        Note:
+            The method uses consistent random seeds for transformations that
+            require randomization to ensure consistent augmentation across
+            image and mask pairs.
+        """
         org_img_idx = idx // len(self.augmenters.keys())
 
         org_img = Image.open(self.imgNamesList[org_img_idx])
@@ -204,34 +286,21 @@ class volvo_onFly(GenericDataLoader):
         )
 
         seed = np.random.randint(27)
-
         augKey = list(self.augmenters.keys())[idx % len(self.augmenters.keys())]
-
         augmenterFunc = self.augmenters[augKey]
 
         if augKey == "crop" or augKey == "rotation":
+            # Apply consistent random transforms to all images
+            for _ in range(4):
+                random.seed(seed)
+                np.random.seed(seed)
+                torch.manual_seed(seed)
 
-            random.seed(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
             org_img = augmenterFunc(org_img)
-
-            random.seed(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
-
-            random.seed(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
             seg_color = augmenterFunc(seg_color)
-
-            random.seed(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
             seg_mask = augmenterFunc(seg_mask)
 
         elif augKey == "erasing" or augKey == "augMix":
-
             random.seed(seed)
             np.random.seed(seed)
             torch.manual_seed(seed)
