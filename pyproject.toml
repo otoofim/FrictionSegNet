@@ -11,7 +11,9 @@ dependencies = [
     "torch (>=2.5.1,<3.0.0)",
     "torchvision (>=0.20.1,<0.21.0)",
     "torchaudio (>=2.5.1,<3.0.0)",
-    "cityscapesscripts (>=2.2.4,<3.0.0)"
+    "cityscapesscripts (>=2.2.4,<3.0.0)",
+    "numpy (==1.24.3)",
+    "pillow (==9.4)"
 ]
 
 
