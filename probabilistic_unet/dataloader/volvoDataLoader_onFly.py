@@ -1,6 +1,6 @@
 import glob
 import json
-from frictionsegnet.dataloader import GenericDataLoader, volvoData
+from probabilistic_unet.dataloader import GenericDataLoader, volvoData
 import torchvision.transforms as T
 import torch.nn.functional as F
 from torchvision import transforms

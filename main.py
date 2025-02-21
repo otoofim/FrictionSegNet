@@ -1,7 +1,7 @@
 import argparse
 import os
 import sys
-from frictionsegnet.Train import *
+from probabilistic_unet.Train import *
 import yaml
 
 

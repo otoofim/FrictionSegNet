@@ -1,4 +1,4 @@
-from frictionsegnet.dataloader import GenericDataLoader, RSCDClassNames
+from probabilistic_unet.dataloader import GenericDataLoader, RSCDClassNames
 from pathlib import Path
 import glob
 import os
