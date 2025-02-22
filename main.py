@@ -1,15 +1,7 @@
-import argparse
-import os
-import sys
-from probabilistic_unet.Train import *
-import yaml
-
-
-def main():
-    f = open("config.yml", "r")
-    args = yaml.safe_load(f)
-    train(**args)
+from probabilistic_unet.Train import train
+from probabilistic_unet.utils import ConfigManager
 
 
 if __name__ == "__main__":
-    main()
+    config = ConfigManager("config.yaml")
+    train(config)

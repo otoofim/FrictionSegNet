@@ -11,6 +11,8 @@ from torchvision import transforms
 from MapillaryIntendedObjs import classIds, friClass
 import glob
 import json
+from probabilistic_unet.utils.config_loader.config_class import DatasetConfig
+
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -41,16 +43,16 @@ class GenericDataLoader(Dataset):
         reducedCategories (bool): Flag for using reduced categories
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, dataset_config: DatasetConfig, mode: str):
         super().__init__()
-        if kwargs["mode"] not in ["train", "val"]:
+        if mode not in ["train", "val"]:
             raise ValueError("Valid values for mode argument are: train, val")
 
-        self.mode = kwargs["mode"]
-        self.imgSize = kwargs["input_img_dim"]
+        self.mode = mode
+        self.imgSize = dataset_config.input_img_dim
         self.reducedCategoriesColors = classIds
         self.friClass = friClass
-        self.reducedCategories = kwargs["reducedCategories"]
+        self.reducedCategories = dataset_config.educedCategories
 
         self.pixel_to_color = np.vectorize(self.return_color)
 

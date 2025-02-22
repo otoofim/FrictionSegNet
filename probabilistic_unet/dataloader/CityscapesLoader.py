@@ -9,6 +9,8 @@ from cityscapesscripts.helpers.labels import labels as city_labels
 from PIL import Image
 import torch
 
+from probabilistic_unet.utils.config_loader.config_class import DatasetConfig
+
 
 class CityscapesLoader(GenericDataLoader):
     """A data loader for the Cityscapes dataset that inherits from GenericDataLoader.
@@ -35,10 +37,10 @@ class CityscapesLoader(GenericDataLoader):
         transform_ou (transforms.Compose): Output label transformation pipeline
     """
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, dataset_config: DatasetConfig, mode: str) -> None:
+        super().__init__(dataset_config, mode)
 
-        self.datasetRootPath = Path(kwargs["cityscapesRootPath"])
+        self.datasetRootPath = dataset_config.cityscapesRootPath
 
         # Build dataset of valid image paths
         self.dataset = self._build_dataset()
