@@ -8,11 +8,11 @@ import torchvision.transforms as T
 import torch.nn.functional as F
 from torch.distributions import Normal, Independent, kl, MultivariateNormal
 from torchmetrics.functional.classification import multiclass_calibration_error
-from Prior import *
-from Posterior import *
+from probabilistic_unet.model.prior import *
+from probabilistic_unet.model.posterior import *
 import sys
 sys.path.insert(2, '../dataLoaders')
-from MapillaryIntendedObjs import *
+from probabilistic_unet.dataloader.mapillary_intended_objs import *
 from sklearn.preprocessing import normalize
 
 

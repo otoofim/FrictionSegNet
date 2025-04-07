@@ -1,4 +1,4 @@
-from probabilistic_unet.Train import train
+from probabilistic_unet.train import train
 from probabilistic_unet.utils import ConfigManager
 
 

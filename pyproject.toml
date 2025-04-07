@@ -14,7 +14,11 @@ dependencies = [
     "cityscapesscripts (>=2.2.4,<3.0.0)",
     "numpy (==1.24.3)",
     "pillow (==9.4)",
-    "pyyaml (>=6.0.2,<7.0.0)"
+    "pyyaml (>=6.0.2,<7.0.0)",
+    "torchmetrics (>=1.7.0,<2.0.0)",
+    "wandb (>=0.19.9,<0.20.0)",
+    "crfseg (>=1.0.0,<2.0.0)",
+    "scikit-learn (>=1.6.1,<2.0.0)"
 ]
 
 

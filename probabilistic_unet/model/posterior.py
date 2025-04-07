@@ -7,7 +7,7 @@ import torchvision
 import torchvision.transforms as T
 import torch.nn.functional as F
 from torch.distributions import Normal, Independent, kl, MultivariateNormal
-from UNetBlocks import *
+from probabilistic_unet.model.unet_blocks import *
 
 
 

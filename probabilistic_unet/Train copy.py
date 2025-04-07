@@ -1,342 +1,525 @@
 import sys
 from pathlib import Path
+import warnings
 import json
+
 import torch
 from torch.utils.data import DataLoader, ConcatDataset
-import torch.nn.functional as F
-import numpy as np
-import wandb
-import logging
-from dataclasses import dataclass
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-from typing import Dict, List, Optional, Tuple
-from sklearn import metrics
-import torch.nn as nn
 
+from tqdm import tqdm
+import wandb
+
+# Add local modules to path
 sys.path.insert(1, "./architecture")
 sys.path.insert(2, "./dataLoaders")
 
+import torch.nn as nn
 from probabilistic_unet.utils.config_loader.config_manager import ConfigManager
+from probabilistic_unet.dataloader.GenericDataLoader import classIds
 from probabilistic_unet.dataloader.CityscapesLoader import CityscapesLoader
 from probabilistic_unet.model.ProUNet import ProUNet
 
+# Suppress warnings for cleaner output
+warnings.simplefilter(action="ignore", category=FutureWarning)
+warnings.filterwarnings("ignore")
 
-@dataclass
-class TrainingMetrics:
-    """Container for tracking training and validation metrics"""
 
-    training: Dict[str, List]
-    validation: Dict[str, List]
+def train(configs: ConfigManager) -> None:
+    """
+    Main training function for the ProUNet model.
 
-    @classmethod
-    def initialize(cls):
-        base_metrics = {
-            "Total loss": [],
-            "KL loss": [],
-            "Reconstruction loss": [],
-            "mIoU": [],
-            "ECE": [],
-            "MCE": [],
-            "RMSCE": [],
-            "NLL": [],
-            "Brier": [],
-            "Regression loss": [],
-            "Confusion Matrix": [],
-        }
+    Args:
+        configs (ConfigManager): Configuration object containing all training parameters
+                               and model settings.
 
-        training = base_metrics.copy()
-        training.update(
-            {
-                "lambda_fri_coefficient": [],
-                "lambda_seg_coefficient": [],
-            }
+    The function handles:
+    1. Wandb initialization and logging setup
+    2. Dataset loading and preparation
+    3. Model initialization and optimizer setup
+    4. Training loop with validation
+    5. Metrics calculation and logging
+    6. Model checkpointing
+    """
+    # Setup model checkpoint directory
+    configs.model_add = (
+        Path("checkpoints") / f"{configs.project_name}_{configs.run_name}"
+    )
+
+    # Initialize wandb for experiment tracking
+    _initialize_wandb(configs)
+
+    # Prepare datasets and dataloaders
+    train_loader, val_loader = _prepare_dataloaders(configs)
+
+    # Setup device (CPU/GPU)
+    device = _setup_device(configs)
+
+    # Initialize model and optimizer
+    model, optimizer = _initialize_model_and_optimizer(configs, device)
+
+    # Initialize tracking dictionaries for losses and metrics
+    tr_loss = _initialize_tracking_dict()
+    val_loss = _initialize_tracking_dict()
+
+    # Training loop
+    start_epoch, total_epochs = _get_epoch_range(configs)
+
+    with tqdm(
+        range(start_epoch, total_epochs),
+        initial=start_epoch,
+        total=total_epochs,
+        unit="epoch",
+        leave=True,
+        position=0,
+    ) as epobar:
+        for epoch in epobar:
+            _run_training_epoch(
+                epoch=epoch,
+                model=model,
+                optimizer=optimizer,
+                train_loader=train_loader,
+                device=device,
+                tr_loss=tr_loss,
+                configs=configs,
+                epobar=epobar,
+            )
+
+
+def _initialize_wandb(configs: ConfigManager) -> None:
+    """Initialize Weights & Biases logging."""
+    if configs.continue_tra.enable:
+        wandb.init(
+            config=json.dumps(configs.config_dict),
+            project=configs.project_name,
+            entity=configs.entity,
+            name=configs.run_name,
+            resume="must",
+            id=configs.continue_tra.wandb_id,
+        )
+    else:
+        wandb.init(
+            config=json.dumps(configs.config_dict),
+            project=configs.project_name,
+            entity=configs.entity,
+            name=configs.run_name,
+            resume="allow",
         )
 
-        return cls(training=training, validation=base_metrics.copy())
+
+def _prepare_dataloaders(configs: ConfigManager) -> tuple[DataLoader, DataLoader]:
+    """
+    Prepare training and validation dataloaders.
+
+    Returns:
+        tuple: (train_loader, val_loader)
+    """
+    # Initialize dataset lists
+    traDatasets = [CityscapesLoader(DatasetConfig=configs.datasetConfig, mode="train")]
+    valDatasets = [CityscapesLoader(DatasetConfig=configs.datasetConfig, mode="val")]
+
+    # Combine datasets
+    train_dev_sets = ConcatDataset(traDatasets)
+    val_dev_sets = ConcatDataset(valDatasets)
+
+    # Create dataloaders
+    train_loader = DataLoader(
+        dataset=train_dev_sets,
+        batch_size=configs.batch_size,
+        shuffle=True,
+        drop_last=True,
+    )
+
+    val_loader = DataLoader(
+        dataset=val_dev_sets,
+        batch_size=configs.batch_size,
+        shuffle=True,
+        drop_last=True,
+    )
+
+    return train_loader, val_loader
 
 
-class Trainer:
-    def __init__(self, configs: ConfigManager):
-        self.configs = configs
-        self.setup_logging()
-        self.setup_paths()
-        self.metrics = TrainingMetrics.initialize()
-        self.device = self._setup_device()
+def _setup_device(configs: ConfigManager) -> torch.device:
+    """Setup and return the appropriate device (CPU/GPU)."""
+    if configs.device == "cpu":
+        device = torch.device("cpu")
+        print("Running on the CPU")
+    else:
+        device = torch.device(configs.device_name)
+        print("Running on the GPU")
+    return device
 
-    def setup_logging(self):
-        """Configure logging"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.FileHandler(f"{self.configs.project_name}.log"),
-                logging.StreamHandler(),
-            ],
+
+def _initialize_model_and_optimizer(
+    configs: ConfigManager, device: torch.device
+) -> tuple[ProUNet, torch.optim.Adam]:
+    """
+    Initialize the model and optimizer.
+
+    Returns:
+        tuple: (model, optimizer)
+    """
+    # Initialize model
+    model = ProUNet(
+        gecoConfig=configs.GECO,
+        num_classes=configs.num_classes,
+        LatentVarSize=configs.latent_dim,
+        beta=configs.beta,
+        training=True,
+        num_samples=configs.num_samples,
+        device=device,
+    ).to(device)
+
+    # Load model state if continuing training
+    if configs.continue_tra.enable or configs.pretrained.enable:
+        _load_model_state(model, configs, device)
+
+    # Initialize optimizer
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=configs.learning_rate, weight_decay=configs.momentum
+    )
+
+    # Load optimizer state if continuing training
+    if configs.continue_tra.enable:
+        _load_optimizer_state(optimizer, configs, device)
+
+    return model, optimizer
+
+
+def _run_training_epoch(
+    epoch: int,
+    model: ProUNet,
+    optimizer: torch.optim.Adam,
+    train_loader: DataLoader,
+    device: torch.device,
+    tr_loss: dict,
+    configs: ConfigManager,
+    epobar: tqdm,
+) -> None:
+    """
+    Run a single training epoch.
+
+    Args:
+        epoch: Current epoch number
+        model: The ProUNet model
+        optimizer: The optimizer
+        train_loader: Training data loader
+        device: Device to run on
+        tr_loss: Dictionary to track training losses
+        configs: Configuration object
+        epobar: Progress bar for epochs
+    """
+    model.train()
+    epobar.set_description(f"Epoch {epoch + 1}")
+
+    with tqdm(train_loader, unit="batch", leave=False) as batbar:
+        for i, batch in enumerate(batbar):
+            loss = _process_batch(model, optimizer, batch, device, tr_loss)
+
+            # Update progress bar
+            batbar.set_description(f"Batch {i + 1}")
+
+            # Save checkpoint periodically
+            if i % 1000 == 0:
+                _save_checkpoint(model, optimizer, epoch, tr_loss, configs)
+
+            # Log metrics to wandb
+            _log_metrics(model, batch, tr_loss, epoch)
+
+
+def _process_batch(
+    model: ProUNet,
+    optimizer: torch.optim.Adam,
+    batch: dict,
+    device: torch.device,
+    tr_loss: dict,
+) -> torch.Tensor:
+    """
+    Process a single batch of data.
+
+    Returns:
+        torch.Tensor: The loss value for this batch
+    """
+    optimizer.zero_grad()
+
+    # Move batch to device
+    batchImg = batch["image"].to(device)
+    batchLabel = batch["label"].to(device)
+
+    # Forward pass
+    seg, priorDists, posteriorDists = model(batchImg, batchLabel)
+
+    # Calculate losses
+    loss, kl_mean, kl_losses, rec_loss, miou, ious, l1Loss, l2Loss, l3Loss, CM = (
+        model.loss(batchLabel, seg, priorDists, posteriorDists)
+    )
+
+    # Backward pass
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, foreach=True)
+    optimizer.step()
+
+    # Update tracking metrics
+    _update_tracking_metrics(
+        tr_loss,
+        loss,
+        kl_mean,
+        rec_loss,
+        miou,
+        l1Loss,
+        l2Loss,
+        l3Loss,
+        CM,
+        model,
+        seg,
+        batchLabel,
+    )
+
+    return loss
+
+
+def _initialize_tracking_dict() -> dict:
+    """Initialize and return the dictionary for tracking losses and metrics."""
+    return {
+        "Total training loss": [],
+        "KL training loss": [],
+        "Reconstruction training loss": [],
+        "mIoU training": [],
+        "ECE training": [],
+        "MCE training": [],
+        "RMSCE training": [],
+        "lambda fri coeficient": [],
+        "lambda seg coeficient": [],
+        "NLL training": [],
+        "Brie training": [],
+        "Regression training loss": [],
+        "Confusion Matrix training": [],
+    }
+
+
+"""
+[Previous code remains the same up to _initialize_tracking_dict()]
+"""
+
+
+def _load_model_state(
+    model: ProUNet, configs: ConfigManager, device: torch.device
+) -> None:
+    """
+    Load model state from checkpoint.
+
+    Args:
+        model: The ProUNet model
+        configs: Configuration object
+        device: Device to load the state dict to
+    """
+    if configs.continue_tra.enable:
+        checkpoint_path = configs.model_add / f"{configs.continue_tra.which_model}.pth"
+    else:  # pretrained.enable
+        checkpoint_path = (
+            configs.pretrained.model_add / f"{configs.pretrained.which_model}.pth"
         )
-        self.logger = logging.getLogger(__name__)
 
-    def setup_paths(self):
-        """Setup training paths and directories"""
-        self.checkpoint_dir = Path("checkpoints")
-        self.model_path = (
-            self.checkpoint_dir / f"{self.configs.project_name}_{self.configs.run_name}"
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    print("Model state dict loaded successfully")
+
+
+def _load_optimizer_state(
+    optimizer: torch.optim.Adam, configs: ConfigManager, device: torch.device
+) -> None:
+    """
+    Load optimizer state from checkpoint.
+
+    Args:
+        optimizer: The Adam optimizer
+        configs: Configuration object
+        device: Device to load the state dict to
+    """
+    checkpoint_path = configs.model_add / f"{configs.continue_tra.which_model}.pth"
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    print("Optimizer state dict loaded successfully")
+
+
+def _get_epoch_range(configs: ConfigManager) -> tuple[int, int]:
+    """
+    Get the starting and total epochs for training.
+
+    Returns:
+        tuple: (start_epoch, total_epochs)
+    """
+    start_epoch = 0
+    if configs.continue_tra.enable:
+        checkpoint_path = configs.model_add / f"{configs.continue_tra.which_model}.pth"
+        checkpoint = torch.load(checkpoint_path)
+        start_epoch = checkpoint["epoch"] + 1
+
+    return start_epoch, configs.epochs
+
+
+def _save_checkpoint(
+    model: ProUNet,
+    optimizer: torch.optim.Adam,
+    epoch: int,
+    tr_loss: dict,
+    configs: ConfigManager,
+    val_loss: dict = None,
+) -> None:
+    """
+    Save model checkpoint.
+
+    Args:
+        model: The ProUNet model
+        optimizer: The optimizer
+        epoch: Current epoch number
+        tr_loss: Training loss dictionary
+        configs: Configuration object
+        val_loss: Validation loss dictionary (optional)
+    """
+    # Create checkpoint directory if it doesn't exist
+    if not configs.model_add.exists():
+        configs.model_add.mkdir(parents=True)
+
+    # Prepare checkpoint data
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "tr_loss": tr_loss,
+        "hyper_params": json.dumps(configs.config_dict),
+    }
+
+    if val_loss is not None:
+        checkpoint["val_loss"] = val_loss
+
+    # Save checkpoint
+    torch.save(checkpoint, configs.model_add / "iterative.pth")
+
+
+def _update_tracking_metrics(
+    tr_loss: dict,
+    loss: torch.Tensor,
+    kl_mean: torch.Tensor,
+    rec_loss: torch.Tensor,
+    miou: torch.Tensor,
+    l1Loss: torch.Tensor,
+    l2Loss: torch.Tensor,
+    l3Loss: torch.Tensor,
+    CM: torch.Tensor,
+    model: ProUNet,
+    seg: torch.Tensor,
+    batchLabel: torch.Tensor,
+) -> None:
+    """
+    Update tracking metrics dictionary with current batch results.
+
+    Args:
+        tr_loss: Training loss dictionary
+        loss: Total loss
+        kl_mean: KL divergence mean
+        rec_loss: Reconstruction loss
+        miou: Mean IoU
+        l1Loss: ECE loss
+        l2Loss: MCE loss
+        l3Loss: RMSCE loss
+        CM: Confusion matrix
+        model: The ProUNet model
+        seg: Model predictions
+        batchLabel: Ground truth labels
+    """
+    # Update basic metrics
+    tr_loss["Total training loss"].append(loss.detach().cpu().item())
+    tr_loss["KL training loss"].append(kl_mean.detach().cpu().item())
+    tr_loss["Reconstruction training loss"].append(rec_loss.detach().cpu().item())
+    tr_loss["mIoU training"].append(torch.mean(miou).detach().cpu().item())
+    tr_loss["ECE training"].append(l1Loss.detach().cpu().item())
+    tr_loss["MCE training"].append(l2Loss.detach().cpu().item())
+    tr_loss["RMSCE training"].append(l3Loss.detach().cpu().item())
+
+    # Update GECO coefficients if enabled
+    if hasattr(model, "geco") and model.geco is not None:
+        tr_loss["lambda seg coeficient"].append(
+            model.geco.lambda_s.detach().cpu().item()
         )
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    def _train_epoch(
-        self,
-        model: nn.Module,
-        train_loader: DataLoader,
-        optimizer: torch.optim.Optimizer,
-        epoch: int,
-    ) -> Dict:
-        """Execute one training epoch"""
-        tr_metrics = TrainingMetrics.initialize().training
+    # Update NLL and Brier score
+    tr_loss["NLL training"].append(
+        nn.NLLLoss()(F.log_softmax(seg), torch.argmax(batchLabel, 1))
+        .detach()
+        .cpu()
+        .item()
+    )
+    tr_loss["Brie training"].append(
+        torch.mean(torch.square(seg - batchLabel)).detach().cpu().item()
+    )
+    tr_loss["Confusion Matrix training"].append(CM)
 
-        with tqdm(train_loader, unit="batch", leave=False) as batbar:
-            for i, batch in enumerate(batbar):
-                batbar.set_description(f"Batch {i + 1}")
 
-                # Zero gradients
-                optimizer.zero_grad()
-                model.train()
+def _log_metrics(model: ProUNet, batch: dict, tr_loss: dict, epoch: int) -> None:
+    """
+    Log metrics to wandb.
 
-                # Move data to device
-                batch_img = batch["image"].to(self.device)
-                batch_label = batch["label"].to(self.device)
-                fri_label = batch["FriLabel"].to(self.device)
+    Args:
+        model: The ProUNet model
+        batch: Current batch of data
+        tr_loss: Training loss dictionary
+        epoch: Current epoch number
+    """
+    # Log images
+    org_img = {
+        "input": wandb.Image(batch["image"][-5:].detach().cpu()),
+        "ground truth": wandb.Image(batch["seg"][-5:].detach().cpu()),
+        "prediction": wandb.Image(
+            model.dataloader.prMask_to_color(batch["seg"][-5:].detach().cpu())
+        ),
+    }
+    wandb.log(org_img)
 
-                # Forward pass
-                seg, prior_dists, posterior_dists, fri_pred = model(
-                    batch_img, batch_label, fri_label
-                )
+    # Log confusion matrix
+    _log_confusion_matrix(tr_loss)
 
-                # Calculate losses
-                (
-                    loss,
-                    kl_mean,
-                    kl_losses,
-                    rec_loss,
-                    miou,
-                    ious,
-                    l1_loss,
-                    l2_loss,
-                    l3_loss,
-                    reg_loss,
-                    cm,
-                ) = model.loss(
-                    batch_label, seg, prior_dists, posterior_dists, fri_label, fri_pred
-                )
-
-                # Backward pass
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-
-                # Update metrics
-                self._update_training_metrics(
-                    tr_metrics,
-                    model,
-                    batch,
-                    seg,
-                    loss,
-                    kl_mean,
-                    rec_loss,
-                    miou,
-                    l1_loss,
-                    l2_loss,
-                    l3_loss,
-                    reg_loss,
-                    cm,
-                    kl_losses,
-                    ious,
-                )
-
-                # Save intermediate checkpoints
-                if i % 1000 == 0:
-                    self.save_checkpoint(
-                        epoch, model, optimizer, tr_metrics, name="iterative"
-                    )
-
-        # Log training visualizations
-        self._log_training_visualizations(batch, seg, epoch, tr_metrics)
-
-        return tr_metrics
-
-    def _validate_epoch(
-        self, model: nn.Module, val_loader: DataLoader, epoch: int
-    ) -> Dict:
-        """Execute one validation epoch"""
-        val_metrics = TrainingMetrics.initialize().validation
-
-        with torch.no_grad(), tqdm(val_loader, unit="batch", leave=False) as valbar:
-            for i, batch in enumerate(valbar):
-                valbar.set_description(f"Val_batch {i + 1}")
-                model.eval()
-
-                # Move data to device
-                batch_img = batch["image"].to(self.device)
-                batch_label = batch["label"].to(self.device)
-                fri_label = batch["FriLabel"].to(self.device)
-
-                # Get model predictions
-                samples, priors, posterior_dists, fri_preds = model.evaluation(
-                    batch_img, batch_label, fri_label
-                )
-
-                # Calculate validation metrics for each sample
-                self._calculate_validation_metrics(
-                    val_metrics,
-                    model,
-                    batch,
-                    samples,
-                    priors,
-                    posterior_dists,
-                    batch_label,
-                    fri_label,
-                    fri_preds,
-                )
-
-        # Log validation visualizations
-        self._log_validation_visualizations(batch, samples, epoch, val_metrics)
-
-        return val_metrics
-
-    def _update_training_metrics(
-        self, metrics: Dict, model: nn.Module, batch: Dict, seg: torch.Tensor, *args
-    ):
-        """Update training metrics dictionary"""
-        (
-            loss,
-            kl_mean,
-            rec_loss,
-            miou,
-            l1_loss,
-            l2_loss,
-            l3_loss,
-            reg_loss,
-            cm,
-            kl_losses,
-            ious,
-        ) = args
-
-        metrics["Total loss"].append(loss.detach().cpu().item())
-        metrics["KL loss"].append(kl_mean.detach().cpu().item())
-        metrics["Reconstruction loss"].append(rec_loss.detach().cpu().item())
-        metrics["mIoU"].append(torch.mean(miou).detach().cpu().item())
-        metrics["ECE"].append(l1_loss.detach().cpu().item())
-        metrics["MCE"].append(l2_loss.detach().cpu().item())
-        metrics["RMSCE"].append(l3_loss.detach().cpu().item())
-
-        if self.configs.GECO["enable"]:
-            metrics["lambda_fri_coefficient"].append(
-                model.geco.lambda_f.detach().cpu().item()
+    # Log other metrics
+    for key in tr_loss.keys():
+        if "iou" in key or "mIoU" in key:
+            wandb.log(
+                {
+                    key: torch.tensor([tr_loss[key]]).nanmean(),
+                    "epoch": epoch + 1,
+                }
             )
-            metrics["lambda_seg_coefficient"].append(
-                model.geco.lambda_s.detach().cpu().item()
+        elif "Confusion Matrix" not in key:
+            wandb.log(
+                {
+                    key: torch.mean(torch.tensor(tr_loss[key])),
+                    "epoch": epoch + 1,
+                }
             )
 
-        # Add KL losses and IoUs for each layer
-        self._update_layer_metrics(metrics, kl_losses, "KL loss layer")
-        self._update_layer_metrics(metrics, ious, "iou of")
 
-    def _calculate_validation_metrics(
-        self, metrics: Dict, model: nn.Module, batch: Dict, samples: torch.Tensor, *args
-    ) -> None:
-        """Calculate and update validation metrics"""
-        priors, posterior_dists, batch_label, fri_label, fri_preds = args
+def _log_confusion_matrix(tr_loss: dict) -> None:
+    """
+    Create and log confusion matrix visualization to wandb.
 
-        for i, sample in enumerate(samples):
-            (
-                loss,
-                kl_mean,
-                kl_losses,
-                rec_loss,
-                miou,
-                ious,
-                l1_loss,
-                l2_loss,
-                l3_loss,
-                reg_loss,
-                cm,
-            ) = model.loss(
-                batch_label, sample, priors, posterior_dists, fri_label, fri_preds[i]
-            )
+    Args:
+        tr_loss: Training loss dictionary containing confusion matrix data
+    """
+    plt.rcParams.update({"font.size": 22})
+    plt.rcParams["font.weight"] = "bold"
+    plt.rcParams["axes.labelweight"] = "bold"
 
-            self._update_validation_sample_metrics(
-                metrics,
-                loss,
-                kl_mean,
-                rec_loss,
-                miou,
-                l1_loss,
-                l2_loss,
-                l3_loss,
-                reg_loss,
-                cm,
-                kl_losses,
-                ious,
-                sample,
-                batch_label,
-            )
+    fig, ax = plt.subplots(figsize=(22, 20), dpi=100)
+    ax.set_xlabel("Predicted labels")
+    ax.set_ylabel("True labels")
 
-    def train(self):
-        """Main training loop"""
-        self.initialize_wandb()
-        train_loader, val_loader = self.setup_datasets()
-        model = self.setup_model(train_loader.dataset.datasets[0].get_num_classes())
-        optimizer, scheduler = self.setup_optimizer(model)
+    # Calculate epoch-level confusion matrix
+    CMEpoch = torch.nansum(torch.stack(tr_loss["Confusion Matrix training"]), dim=0)
+    CMEpoch = torch.round(CMEpoch / CMEpoch.sum(dim=0, keepdim=True), decimals=2)
+    CMEpoch = torch.nan_to_num(CMEpoch).cpu().detach().numpy()
 
-        start_epoch = self._get_start_epoch()
-        best_val_miou = -1
+    # Create and log confusion matrix plot
+    cm_display = metrics.ConfusionMatrixDisplay(
+        confusion_matrix=CMEpoch, display_labels=list(classIds.keys())
+    ).plot(xticks_rotation=45, ax=ax)
 
-        wandb.watch(model, log_freq=100)
-
-        for epoch in tqdm(
-            range(start_epoch, self.configs.epochs),
-            initial=start_epoch,
-            total=self.configs.epochs,
-        ):
-            try:
-                # Training phase
-                tr_metrics = self._train_epoch(model, train_loader, optimizer, epoch)
-
-                # Validation phase
-                if (epoch + 1) % self.configs.val_frequency == 0:
-                    val_metrics = self._validate_epoch(model, val_loader, epoch)
-
-                    # Update learning rate scheduler
-                    val_miou = np.mean(val_metrics["mIoU"])
-                    scheduler.step(val_miou)
-
-                    # Save best model
-                    if val_miou > best_val_miou:
-                        best_val_miou = val_miou
-                        self.save_checkpoint(
-                            epoch,
-                            model,
-                            optimizer,
-                            {"train": tr_metrics, "val": val_metrics},
-                            name="best",
-                        )
-
-                # Log metrics
-                self._log_metrics(epoch, tr_metrics, val_metrics)
-
-            except Exception as e:
-                self.logger.error(f"Error during epoch {epoch}: {str(e)}")
-                raise
-
-        self.logger.info("Training completed")
-        wandb.finish()
-
-
-# Additional helper methods would go here (visualization, metric logging, etc.)
-# Implementation details omitted for brevity
-
-if __name__ == "__main__":
-    configs = ConfigManager()
-    trainer = Trainer(configs)
-    trainer.train()
+    wandb.log({"Confusion matrix training": plt})

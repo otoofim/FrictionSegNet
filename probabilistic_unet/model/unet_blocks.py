@@ -6,7 +6,7 @@ from torch.distributions import Normal, Independent, kl
 import torchvision
 import torchvision.transforms as T
 from torch.distributions import Normal, Independent, kl, MultivariateNormal
-from ResidualBlock import *
+from probabilistic_unet.model.residual_block import *
 
 class DownConvBlock(nn.Module):
     """
