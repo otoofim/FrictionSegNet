@@ -8,7 +8,7 @@ from PIL import ImageFile, Image
 from cityscapesscripts.helpers.labels import labels as city_labels
 from torchvision.datasets import Cityscapes
 from torchvision import transforms
-from MapillaryIntendedObjs import classIds, friClass
+from probabilistic_unet.dataloader.mapillary_intended_objs import classIds, friClass
 import glob
 import json
 from probabilistic_unet.utils.config_loader.config_class import DatasetConfig
@@ -52,7 +52,7 @@ class GenericDataLoader(Dataset):
         self.imgSize = dataset_config.input_img_dim
         self.reducedCategoriesColors = classIds
         self.friClass = friClass
-        self.reducedCategories = dataset_config.educedCategories
+        self.reducedCategories = dataset_config.reducedCategories
 
         self.pixel_to_color = np.vectorize(self.return_color)
 

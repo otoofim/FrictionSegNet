@@ -29,18 +29,18 @@ import json
 
 import torch.nn as nn
 from probabilistic_unet.utils.config_loader.config_manager import ConfigManager
-from probabilistic_unet.dataloader.GenericDataLoader import classIds
-from probabilistic_unet.dataloader.CityscapesLoader import CityscapesLoader
-from probabilistic_unet.model.ProUNet import ProUNet
+from probabilistic_unet.dataloader.generic_dataloader import classIds
+from probabilistic_unet.dataloader.cityscapes_loader import CityscapesLoader
+from probabilistic_unet.model.pro_unet import ProUNet
+
+from dataclasses import asdict
+
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.filterwarnings("ignore")
 
 
 def train(configs: ConfigManager):
-    configs.model_add = Path("checkpoints") / "{}_{}".format(
-        configs.project_name, configs.run_name
-    )
 
     if configs.continue_tra.enable:
         wandb.init(
@@ -54,7 +54,7 @@ def train(configs: ConfigManager):
         print("wandb resumed...")
     else:
         wandb.init(
-            config=json.dumps(configs.config_dict),
+            config=asdict(configs),
             project=configs.project_name,
             entity=configs.entity,
             name=configs.run_name,
@@ -68,10 +68,10 @@ def train(configs: ConfigManager):
     valid_sampler = None
 
     traDatasets.append(
-        CityscapesLoader(DatasetConfig=configs.datasetConfig, mode="train")
+        CityscapesLoader(dataset_config=configs.datasetConfig, mode="train")
     )
     valDatasets.append(
-        CityscapesLoader(DatasetConfig=configs.datasetConfig, mode="val")
+        CityscapesLoader(dataset_config=configs.datasetConfig, mode="val")
     )
     print("CityScapes dataset added!")
 

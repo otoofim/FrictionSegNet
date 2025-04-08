@@ -17,9 +17,13 @@ from probabilistic_unet.utils.config_loader.config_class import (
 
 
 class ConfigManager:
-    def __init__(self, config_path: str | Path):
+    def __init__(self, config_path: str):
         self.config_path = Path(config_path)
-        self.config = self._load_and_validate_config()
+        self.configs = self._load_and_validate_config()
+
+        self.configs.model_add = Path("checkpoints") / "{}_{}".format(
+        self.configs.project_name, self.configs.run_name
+        )
 
     def _load_and_validate_config(self) -> ProjectConfig:
         """Load and validate configuration from YAML file."""
@@ -119,3 +123,6 @@ class ConfigManager:
         """
         config_dict = self.to_dict()
         return json.dumps(config_dict, indent=indent)
+
+    def get_configs(self):
+        return self.configs

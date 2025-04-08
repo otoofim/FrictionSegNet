@@ -1,4 +1,4 @@
-from probabilistic_unet.dataloader import GenericDataLoader
+from probabilistic_unet.dataloader.generic_dataloader import GenericDataLoader
 from pathlib import Path
 from os.path import exists
 import glob

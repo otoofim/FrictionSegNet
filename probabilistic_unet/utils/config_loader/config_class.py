@@ -72,7 +72,6 @@ class GECOConfig:
 class ProjectConfig:
     run_name: str
     project_name: str
-    model_add: Path = None
     entity: str
     device: str
     device_name: str
@@ -90,3 +89,5 @@ class ProjectConfig:
     continue_tra: ContinueTrainingConfig
     customized_GECO: CustomizedGECOConfig
     GECO: GECOConfig
+    model_add: Path = None
+
