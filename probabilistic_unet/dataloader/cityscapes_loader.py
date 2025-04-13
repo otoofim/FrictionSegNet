@@ -1,162 +1,179 @@
-from probabilistic_unet.dataloader.generic_dataloader import GenericDataLoader
-from pathlib import Path
-from os.path import exists
-import glob
-from typing import Dict, List, Tuple, Union, Optional
+import os
+import random
 import numpy as np
-from torchvision import transforms
-from cityscapesscripts.helpers.labels import labels as city_labels
 from PIL import Image
+from torch.utils.data import Dataset
+import torchvision.transforms as T
 import torch
 
-from probabilistic_unet.utils.config_loader.config_class import DatasetConfig
 
+def prepare_aug_funcs(img_size):
+    """Prepares a dictionary of torchvision augmentation pipelines."""
 
-class CityscapesLoader(GenericDataLoader):
-    """A data loader for the Cityscapes dataset that inherits from GenericDataLoader.
-
-    This class handles loading and preprocessing of Cityscapes dataset images and their
-    corresponding segmentation masks. It supports both full and reduced category sets
-    and provides necessary transformations for both input images and labels.
-
-    Args:
-        **kwargs: Keyword arguments including:
-            cityscapesRootPath (str): Root directory path for Cityscapes dataset
-            mode (str): Dataset mode ('train', 'val', or 'test')
-            imgSize (Tuple[int, int]): Target size for image resizing
-            reducedCategories (bool): Whether to use reduced category set
-            mapillaryNewColors (List[str]): List of Mapillary color categories
-            reducedCategoriesColors (Optional[List[Tuple[int, int, int]]]): Colors for reduced categories
-
-    Attributes:
-        datasetRootPath (Path): Path object pointing to dataset root directory
-        dataset (np.ndarray): Array of paths to valid image files
-        labels (Dict): Mapping between Mapillary colors and Cityscapes colors
-        pixel_to_color (np.vectorize): Vectorized function for color conversion
-        transform_in (transforms.Compose): Input image transformation pipeline
-        transform_ou (transforms.Compose): Output label transformation pipeline
-    """
-
-    def __init__(self, dataset_config: DatasetConfig, mode: str) -> None:
-        super().__init__(dataset_config, mode)
-
-        self.datasetRootPath = dataset_config.cityscapesRootPath
-
-        # Build dataset of valid image paths
-        self.dataset = self._build_dataset()
-
-        # Initialize color mappings
-        self.labels = self._initialize_labels()
-
-        # Create vectorized color conversion function
-        self.pixel_to_color = np.vectorize(self.return_color)
-
-        # Setup transformations
-        self._setup_transformations()
-
-    def _build_dataset(self) -> np.ndarray:
-        """Builds dataset by collecting valid image paths.
-
-        Returns:
-            np.ndarray: Array of valid image file paths.
-        """
-        tmp_dataset = []
-        image_pattern = str(
-            Path.joinpath(self.datasetRootPath, "images", self.mode, "*.jpg")
-        )
-
-        for img_path in glob.glob(image_pattern):
-            if (exists(str(img_path).replace("images", "color"))) and (
-                exists(str(img_path).replace("images", "masks"))
-            ):
-                tmp_dataset.append(img_path)
-
-        return np.array(tmp_dataset)
-
-    def _initialize_labels(self) -> Dict:
-        """Initializes label mappings between Mapillary and Cityscapes colors.
-
-        Returns:
-            Dict: Mapping between Mapillary color names and Cityscapes RGB values.
-        """
-        labels = {}
-        tmp_labels = {
-            label.name.replace(" ", "-"): label.color for label in city_labels
+    def base(img_tfms=[], mask_tfms=[]):
+        return {
+            "image": T.Compose([
+                T.ToTensor(),
+                *img_tfms,
+                T.Resize(img_size),
+                T.ToPILImage(),
+            ]),
+            "mask": T.Compose([
+                T.ToTensor(),
+                *mask_tfms,
+                T.Resize(img_size),
+                T.ToPILImage(),
+            ])
         }
 
-        for mapillary_color in self.mapillaryNewColors:
-            for cityscapes_label in tmp_labels:
-                if cityscapes_label in mapillary_color:
-                    labels[mapillary_color] = tmp_labels[cityscapes_label]
+    return {
+        "org": base(),
+        "crop": base(
+            img_tfms=[T.CenterCrop(size=500)],
+            mask_tfms=[T.CenterCrop(size=500)]
+        ),
+        "grayScale": base(
+            img_tfms=[T.Grayscale(num_output_channels=3)]
+        ),
+        "colorJitter": base(
+            img_tfms=[T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5)]
+        ),
+        "gaussianBlur": base(
+            img_tfms=[T.GaussianBlur(kernel_size=51, sigma=5)]
+        ),
+        "rotation": base(
+            img_tfms=[T.RandomRotation(degrees=30)],
+            mask_tfms=[T.RandomRotation(degrees=30)]
+        ),
+        "elastic": base(
+            img_tfms=[T.ElasticTransform(alpha=500.0)],
+            mask_tfms=[T.ElasticTransform(alpha=500.0)]
+        ),
+        "invert": base(
+            img_tfms=[T.RandomInvert(p=1.0)]
+        ),
+        "solarize": base(
+            img_tfms=[T.RandomSolarize(threshold=0.05, p=1.0)]
+        ),
+        "augMix": {
+            "image": T.Compose([
+                T.AugMix(severity=10, mixture_width=10),
+                T.ToTensor(),
+                T.Resize(img_size),
+                T.ToPILImage(),
+            ]),
+            "mask": T.Compose([
+                T.ToTensor(),
+                T.Resize(img_size),
+                T.ToPILImage(),
+            ])
+        },
+        "posterize": base(
+            img_tfms=[T.RandomPosterize(bits=2, p=1.0)]
+        ),
+        "erasing": {
+            "image": T.Compose([
+                T.ToTensor(),
+                T.RandomErasing(p=1.0, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0),
+                T.Resize(img_size),
+                T.ToPILImage(),
+            ]),
+            "mask": T.Compose([
+                T.ToTensor(),
+                T.Resize(img_size),
+                T.ToPILImage(),
+            ])
+        },
+    }
 
-        return labels
 
-    def _setup_transformations(self) -> None:
-        """Sets up input and output transformation pipelines."""
-        self.transform_in = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    [0.2867, 0.3250, 0.2837], [0.1862, 0.1895, 0.1865]
-                ),
-                transforms.Resize(self.imgSize),
-            ]
-        )
+class CityscapesDataset(Dataset):
+    def __init__(self, root_dir, img_size=(512, 1024), split='train', mode='fine', target_type='semantic'):
+        self.root_dir = root_dir
+        self.split = split
+        self.mode = mode
+        self.target_type = target_type
+        self.img_size = img_size
 
-        self.transform_ou = transforms.Compose(
-            [transforms.ToTensor(), transforms.Resize(self.imgSize)]
-        )
+        self.images_dir = os.path.join(root_dir, 'leftImg8bit', split)
+        self.targets_dir = os.path.join(root_dir, f'gt{mode.capitalize()}', split)
 
-    def get_num_classes(self) -> int:
-        """Returns the number of classes in the dataset.
+        self.images = []
+        self.targets = []
+        self.augmenters = prepare_aug_funcs(self.img_size)
 
-        Returns:
-            int: Number of classes (either reduced or full set).
-        """
-        return (
-            len(self.reducedCategoriesColors)
-            if self.reducedCategories
-            else len(self.labels)
-        )
+        for city in os.listdir(self.images_dir):
+            img_dir = os.path.join(self.images_dir, city)
+            target_dir = os.path.join(self.targets_dir, city)
 
-    def __len__(self) -> int:
-        """Returns the total number of samples in the dataset.
+            for file_name in os.listdir(img_dir):
+                if file_name.endswith('_leftImg8bit.png'):
+                    img_path = os.path.join(img_dir, file_name)
+                    if target_type == 'semantic':
+                        target_suffix = '_gtFine_labelIds.png'
+                    elif target_type == 'instance':
+                        target_suffix = '_gtFine_instanceIds.png'
+                    else:
+                        raise ValueError(f"Unsupported target_type: {target_type}")
+                    target_name = file_name.replace('_leftImg8bit.png', target_suffix)
+                    target_path = os.path.join(target_dir, target_name)
+                    self.images.append(img_path)
+                    self.targets.append(target_path)
 
-        Returns:
-            int: Number of samples.
-        """
-        return len(self.dataset)
+        seed = 200
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        
+    def __len__(self):
+        return len(self.images) * len(self.augmenters)
 
-    def __getitem__(self, idx: Union[int, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Retrieves a sample from the dataset at the given index.
 
-        Args:
-            idx (Union[int, torch.Tensor]): Index of the sample to retrieve.
+    def __getitem__(self, idx):
+        img_idx = idx // len(self.augmenters)
+        aug_key = list(self.augmenters.keys())[idx % len(self.augmenters)]
+        aug = self.augmenters[aug_key]
 
-        Returns:
-            Dict[str, torch.Tensor]: Dictionary containing:
-                - 'image': Transformed input image
-                - 'label': Transformed segmentation label
-                - 'seg': Transformed segmentation color mask
-        """
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
+        img = Image.open(self.images[img_idx]).convert("RGB")
+        mask = Image.open(self.targets[img_idx]).convert("L")
 
-        # Load images and masks
-        img = Image.open(self.dataset[idx])
-        seg_mask = np.array(Image.open(self.dataset[idx].replace("images", "masks")))
-        seg_color = np.array(
-            Image.open(self.dataset[idx].replace("images", "color")).convert("RGB")
-        )
 
-        # Create probability mask
-        label, seg_color = self.create_prob_mask(seg_mask, seg_color)
+        img = aug["image"](img)
+        mask = aug["mask"](mask)
 
-        # Apply transformations
-        if self.transform_in:
-            img = self.transform_in(img)
-            seg_color = transforms.ToTensor()(seg_color)
-        if self.transform_ou:
-            label = self.transform_ou(label)
+        img_tensor = T.ToTensor()(img)
+        mask_tensor = T.ToTensor()(mask).long()
 
-        return {"image": img, "label": label, "seg": seg_color}
+        return {
+            "image": img_tensor.float(),
+            "label": mask_tensor.float(),
+        }
+
+if __name__ == "__main__":
+    from torch.utils.data import DataLoader
+
+    dataset = CityscapesDataset(
+        root_dir="../../datasets/Cityscapes",
+        img_size=(512, 1024),
+        split='train',
+        mode='fine',
+        target_type='semantic'
+    )
+
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=4)
+
+    print("Dataset size:", len(dataset))
+
+    print(dataset[0]["image"].shape)
+    print(dataset[0]["label"].shape)
+
+    # for i, sample in enumerate(dataloader):
+    #     print(f"Batch {i} | Image Shape: {sample['image'].shape} | Label Shape: {sample['label'].shape}")
+
+    #     # Visualize first batch only
+    #     if i == 0:
+    #         visualize_sample({
+    #             "image": sample["image"][0],
+    #             "label": sample["label"][0]
+    #         })
+    #         break
