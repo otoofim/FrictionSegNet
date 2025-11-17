@@ -37,35 +37,13 @@ sys.path.insert(2, "./dataLoaders")
 
 from probabilistic_unet.model.pro_unet import ProUNet
 from probabilistic_unet.utils.config_loader.config_manager import ConfigManager
-from probabilistic_unet.dataloader.cityscapes_loader import CityscapesDataset
+from probabilistic_unet.dataloader.cityscapes_loader import (
+    CityscapesDataset, CityscapesDatasetConfig, create_cityscapes_dataloaders,
+    CITYSCAPES_CLASSES, NUM_CITYSCAPES_CLASSES, CITYSCAPES_COLORS
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.filterwarnings("ignore")
-
-# Cityscapes class definitions
-CITYSCAPES_CLASSES = {
-    0: "road",
-    1: "sidewalk", 
-    2: "building",
-    3: "wall",
-    4: "fence",
-    5: "pole",
-    6: "traffic_light",
-    7: "traffic_sign",
-    8: "vegetation",
-    9: "terrain",
-    10: "sky",
-    11: "person",
-    12: "rider",
-    13: "car",
-    14: "truck",
-    15: "bus",
-    16: "train",
-    17: "motorcycle",
-    18: "bicycle"
-}
-
-NUM_CITYSCAPES_CLASSES = len(CITYSCAPES_CLASSES)
 
 
 class TrainingLogger:
@@ -340,9 +318,9 @@ def validate_epoch(model, val_loader, device, logger, epoch, configs):
     return val_metrics, batch, samples
 
 
-def save_checkpoint(model, optimizer, epoch, tr_metrics, val_metrics, configs, checkpoint_type):
+def save_checkpoint(model, optimizer, epoch, tr_metrics, val_metrics, training_config, checkpoint_type):
     """Save model checkpoint with all necessary information."""
-    model_dir = getattr(configs, 'model_add', './checkpoints')
+    model_dir = training_config.model_dir
     if not os.path.exists(model_dir):
         Path(model_dir).mkdir(parents=True)
     
@@ -352,7 +330,7 @@ def save_checkpoint(model, optimizer, epoch, tr_metrics, val_metrics, configs, c
         "optimizer_state_dict": optimizer.state_dict(),
         "tr_loss": tr_metrics,
         "val_loss": val_metrics,
-        "hyper_params": json.dumps(configs.config_dict if hasattr(configs, 'config_dict') else vars(configs)),
+        "hyper_params": json.dumps(vars(training_config)),
     }
     
     checkpoint_path = os.path.join(model_dir, f"{checkpoint_type}.pth")
@@ -360,104 +338,104 @@ def save_checkpoint(model, optimizer, epoch, tr_metrics, val_metrics, configs, c
     print(f"Checkpoint saved: {checkpoint_path}")
 
 
-def train(configs: ConfigManager):
+class TrainingConfig:
+    """Configuration class for training parameters only."""
+    def __init__(self):
+        # Training settings
+        self.epochs = 100
+        self.learning_rate = 1e-4
+        self.weight_decay = 1e-5
+        self.val_every = 2
+        
+        # Model settings (VAE)
+        self.latent_dim = 6
+        self.beta = 1.0
+        self.num_samples = 16
+        
+        # Device settings
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device_name = 'cuda:0'
+        
+        # Logging settings
+        self.project_name = 'FrictionSegNet-Cityscapes'
+        self.entity = None
+        self.run_name = 'cityscapes_training'
+        
+        # Checkpoint settings
+        self.model_dir = './checkpoints'
+        
+        # GECO settings
+        self.geco_enable = False
+
+
+def train(dataset_config: CityscapesDatasetConfig, training_config: TrainingConfig):
     """Main training function for Cityscapes dataset with comprehensive logging and VAE sampling preservation."""
     
     # Initialize WandB
-    if hasattr(configs, 'continue_tra') and configs.continue_tra.enable:
+    config_dict = {**vars(dataset_config), **vars(training_config)}
+    if hasattr(training_config, 'continue_tra') and training_config.continue_tra.enable:
         wandb.init(
-            config=configs.config_dict if hasattr(configs, 'config_dict') else vars(configs),
-            project=getattr(configs, 'project_name', 'FrictionSegNet'),
-            entity=getattr(configs, 'entity', None),
-            name=getattr(configs, 'run_name', 'cityscapes_training'),
+            config=config_dict,
+            project=training_config.project_name,
+            entity=training_config.entity,
+            name=training_config.run_name,
             resume="must",
-            id=configs.continue_tra.wandb_id,
+            id=training_config.continue_tra.wandb_id,
         )
         print("WandB resumed...")
     else:
         wandb.init(
-            config=configs.config_dict if hasattr(configs, 'config_dict') else vars(configs),
-            project=getattr(configs, 'project_name', 'FrictionSegNet'),
-            entity=getattr(configs, 'entity', None),
-            name=getattr(configs, 'run_name', 'cityscapes_training'),
+            config=config_dict,
+            project=training_config.project_name,
+            entity=training_config.entity,
+            name=training_config.run_name,
             resume="allow",
         )
     
-    # Setup Cityscapes datasets
-    train_dataset = CityscapesDataset(
-        root_dir=getattr(configs, 'cityscapes_root', './datasets/Cityscapes'),
-        img_size=getattr(configs, 'img_size', (512, 1024)),
-        split='train',
-        mode='fine',
-        target_type='semantic'
-    )
+    # Create dataloaders using the enhanced system
+    print("Creating Cityscapes dataloaders with efficient augmentation...")
+    train_loader, val_loader = create_cityscapes_dataloaders(dataset_config)
     
-    val_dataset = CityscapesDataset(
-        root_dir=getattr(configs, 'cityscapes_root', './datasets/Cityscapes'),
-        img_size=getattr(configs, 'img_size', (512, 1024)),
-        split='val',
-        mode='fine',
-        target_type='semantic'
-    )
-    
-    print(f"Cityscapes dataset loaded!")
-    print(f"Training samples: {len(train_dataset)}")
-    print(f"Validation samples: {len(val_dataset)}")
-    
-    # Setup data loaders
-    train_loader = DataLoader(
-        dataset=train_dataset,
-        batch_size=getattr(configs, 'batch_size', 4),
-        shuffle=True,
-        drop_last=True,
-        num_workers=getattr(configs, 'num_workers', 4)
-    )
-    val_loader = DataLoader(
-        dataset=val_dataset,
-        batch_size=getattr(configs, 'batch_size', 4),
-        shuffle=False,
-        drop_last=True,
-        num_workers=getattr(configs, 'num_workers', 4)
-    )
+    print(f"✅ Cityscapes dataloaders created!")
+    print(f"📊 Training samples: {len(train_loader.dataset)}")
+    print(f"📊 Validation samples: {len(val_loader.dataset)}")
+    print(f"🔄 Training augmentations: {len(train_loader.dataset.augmenters)}")
+    print(f"🔄 Validation augmentations: {len(val_loader.dataset.augmenters)}")
     
     # Setup device
-    device_type = getattr(configs, 'device', 'cpu')
-    if device_type == "cpu":
+    if training_config.device == "cpu":
         device = torch.device("cpu")
         print("Running on the CPU")
-    elif device_type == "gpu" or device_type == "cuda":
-        device_name = getattr(configs, 'device_name', 'cuda:0')
-        device = torch.device(device_name if torch.cuda.is_available() else 'cpu')
+    elif training_config.device == "gpu" or training_config.device == "cuda":
+        device = torch.device(training_config.device_name if torch.cuda.is_available() else 'cpu')
         print(f"Running on device: {device}")
     else:
         device = torch.device("cpu")
         print("Default to CPU")
     
     # Initialize model with VAE latent space sampling preserved for Cityscapes
-    geco_config = getattr(configs, 'GECO', {'enable': False})
+    geco_config = {'enable': training_config.geco_enable}
     model = ProUNet(
         gecoConfig=geco_config,
         num_classes=NUM_CITYSCAPES_CLASSES,
-        LatentVarSize=getattr(configs, 'latent_dim', 6),
-        beta=getattr(configs, 'beta', 1.0),
+        LatentVarSize=training_config.latent_dim,
+        beta=training_config.beta,
         training=True,
-        num_samples=getattr(configs, 'num_samples', 16),
+        num_samples=training_config.num_samples,
         device=device,
     )
     
     # Load model state if continuing training or using pretrained
-    if hasattr(configs, 'continue_tra') and configs.continue_tra.enable:
-        model_path = getattr(configs, 'model_add', './checkpoints')
+    if hasattr(training_config, 'continue_tra') and training_config.continue_tra.enable:
         checkpoint = torch.load(
-            os.path.join(model_path, f"{configs.continue_tra.which_model}.pth"),
+            os.path.join(training_config.model_dir, f"{training_config.continue_tra.which_model}.pth"),
             map_location=device,
         )
         model.load_state_dict(checkpoint["model_state_dict"])
         print("Model state dict loaded...")
-    elif hasattr(configs, 'pretrained') and configs.pretrained.enable:
-        pretrained_path = getattr(configs.pretrained, 'model_add', './pretrained')
+    elif hasattr(training_config, 'pretrained') and training_config.pretrained.enable:
         checkpoint = torch.load(
-            os.path.join(pretrained_path, f"{configs.pretrained.which_model}.pth"),
+            os.path.join(training_config.pretrained.model_dir, f"{training_config.pretrained.which_model}.pth"),
             map_location=device,
         )
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -468,12 +446,12 @@ def train(configs: ConfigManager):
     # Setup optimizer
     optimizer = torch.optim.Adam(
         model.parameters(), 
-        lr=getattr(configs, 'learning_rate', 1e-4), 
-        weight_decay=getattr(configs, 'momentum', 1e-5)
+        lr=training_config.learning_rate, 
+        weight_decay=training_config.weight_decay
     )
     
     # Load optimizer state if continuing training
-    if hasattr(configs, 'continue_tra') and configs.continue_tra.enable and 'checkpoint' in locals():
+    if hasattr(training_config, 'continue_tra') and training_config.continue_tra.enable and 'checkpoint' in locals():
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         print("Optimizer state dict loaded...")
     
@@ -482,14 +460,14 @@ def train(configs: ConfigManager):
     
     # Setup training parameters
     best_val = -1
-    val_every = getattr(configs, 'val_every', 2)
+    val_every = training_config.val_every
     wandb.watch(model)
     
     start_epoch = 0
-    if hasattr(configs, 'continue_tra') and configs.continue_tra.enable and 'checkpoint' in locals():
+    if hasattr(training_config, 'continue_tra') and training_config.continue_tra.enable and 'checkpoint' in locals():
         start_epoch = checkpoint["epoch"] + 1
     
-    end_epoch = getattr(configs, 'epochs', 100)
+    end_epoch = training_config.epochs
     total = end_epoch
     
     # Main training loop
@@ -553,7 +531,7 @@ def train(configs: ConfigManager):
                 current_val_miou = torch.mean(torch.tensor(val_metrics["mIoU validation"]))
                 if current_val_miou > best_val:
                     best_val = current_val_miou
-                    save_checkpoint(model, optimizer, epoch, tr_metrics, val_metrics, configs, "best")
+                    save_checkpoint(model, optimizer, epoch, tr_metrics, val_metrics, training_config, "best")
                     print(f"New best validation mIoU: {best_val:.4f}")
             
             # Update progress bar
@@ -568,66 +546,57 @@ def train(configs: ConfigManager):
     print(f"Best validation mIoU: {best_val:.4f}")
     
     # Final model save
-    save_checkpoint(model, optimizer, end_epoch - 1, tr_metrics, val_metrics, configs, "final")
-
-
-class SimpleConfig:
-    """Simple configuration class for Cityscapes training."""
-    def __init__(self):
-        # Dataset configuration
-        self.cityscapes_root = './datasets/Cityscapes'
-        self.img_size = (512, 1024)
-        
-        # Training configuration
-        self.batch_size = 4
-        self.num_workers = 4
-        self.epochs = 100
-        self.learning_rate = 1e-4
-        self.momentum = 1e-5
-        self.val_every = 2
-        
-        # Model configuration
-        self.latent_dim = 6
-        self.beta = 1.0
-        self.num_samples = 16
-        
-        # Device configuration
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.device_name = 'cuda:0'
-        
-        # Logging configuration
-        self.project_name = 'FrictionSegNet-Cityscapes'
-        self.entity = None
-        self.run_name = 'cityscapes_training'
-        
-        # Checkpoint configuration
-        self.model_add = './checkpoints'
-        
-        # GECO configuration
-        self.GECO = {'enable': False}
+    save_checkpoint(model, optimizer, end_epoch - 1, tr_metrics, val_metrics, training_config, "final")
 
 
 if __name__ == "__main__":
-    # Example usage with simple configuration
+    # Example usage with separated configurations
     print("FrictionSegNet Training Script for Cityscapes Dataset")
     print("=" * 60)
     
-    # Create simple configuration
-    configs = SimpleConfig()
+    # Create dataset configuration (only dataset-related settings)
+    dataset_config = CityscapesDatasetConfig()
+    dataset_config.root_dir = './datasets/Cityscapes'
+    dataset_config.batch_size = 4
+    dataset_config.img_size = (512, 1024)
+    dataset_config.use_augmentation = True
     
-    print("Configuration:")
-    print(f"  Dataset root: {configs.cityscapes_root}")
-    print(f"  Image size: {configs.img_size}")
-    print(f"  Batch size: {configs.batch_size}")
-    print(f"  Epochs: {configs.epochs}")
-    print(f"  Learning rate: {configs.learning_rate}")
-    print(f"  Device: {configs.device}")
-    print(f"  VAE latent dim: {configs.latent_dim}")
-    print(f"  VAE samples: {configs.num_samples}")
-    print(f"  Cityscapes classes: {NUM_CITYSCAPES_CLASSES}")
+    # Create training configuration (only training-related settings)
+    training_config = TrainingConfig()
+    training_config.epochs = 100
+    training_config.learning_rate = 1e-4
+    training_config.latent_dim = 6
+    training_config.num_samples = 16
+    
+    print("Dataset Configuration:")
+    print(f"  Dataset root: {dataset_config.root_dir}")
+    print(f"  Image size: {dataset_config.img_size}")
+    print(f"  Batch size: {dataset_config.batch_size}")
+    print(f"  Use augmentation: {dataset_config.use_augmentation}")
+    
+    print("\nTraining Configuration:")
+    print(f"  Epochs: {training_config.epochs}")
+    print(f"  Learning rate: {training_config.learning_rate}")
+    print(f"  Device: {training_config.device}")
+    print(f"  VAE latent dim: {training_config.latent_dim}")
+    print(f"  VAE samples: {training_config.num_samples}")
+    print(f"  Model directory: {training_config.model_dir}")
+    
+    print(f"\nCityscapes classes: {NUM_CITYSCAPES_CLASSES}")
     
     print("\nTo start training, call:")
-    print("  train(configs)")
+    print("  train(dataset_config, training_config)")
+    
+    print("\nExample with custom settings:")
+    print("  dataset_config = CityscapesDatasetConfig()")
+    print("  dataset_config.root_dir = '/path/to/cityscapes'")
+    print("  dataset_config.batch_size = 8")
+    print("  ")
+    print("  training_config = TrainingConfig()")
+    print("  training_config.epochs = 200")
+    print("  training_config.learning_rate = 5e-4")
+    print("  ")
+    print("  train(dataset_config, training_config)")
     
     # Uncomment the line below to start training immediately
-    # train(configs)
+    # train(dataset_config, training_config)
