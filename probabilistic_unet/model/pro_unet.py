@@ -10,9 +10,10 @@ from torch.distributions import Normal, Independent, kl, MultivariateNormal
 from torchmetrics.functional.classification import multiclass_calibration_error
 from probabilistic_unet.model.prior import *
 from probabilistic_unet.model.posterior import *
+from probabilistic_unet.model.objective_function import CrossEntopy, MyMSE
 import sys
 sys.path.insert(2, '../dataLoaders')
-from probabilistic_unet.dataloader.mapillary_intended_objs import *
+# from probabilistic_unet.dataloader.mapillary_intended_objs import *
 from sklearn.preprocessing import normalize
 
 
