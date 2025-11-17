@@ -1,6 +1,6 @@
 """
 Complete training script for FrictionSegNet - Probabilistic U-Net with VAE latent space sampling.
-This script preserves all logging functionality and ensures comprehensive WandB integration.
+Specifically designed for Cityscapes dataset with comprehensive WandB logging.
 """
 
 import sys
@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from torch.distributions import Normal, Independent, kl, MultivariateNormal
 
@@ -37,18 +37,42 @@ sys.path.insert(2, "./dataLoaders")
 
 from probabilistic_unet.model.pro_unet import ProUNet
 from probabilistic_unet.utils.config_loader.config_manager import ConfigManager
-from probabilistic_unet.dataloader.generic_dataloader import classIds
 from probabilistic_unet.dataloader.cityscapes_loader import CityscapesDataset
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.filterwarnings("ignore")
 
+# Cityscapes class definitions
+CITYSCAPES_CLASSES = {
+    0: "road",
+    1: "sidewalk", 
+    2: "building",
+    3: "wall",
+    4: "fence",
+    5: "pole",
+    6: "traffic_light",
+    7: "traffic_sign",
+    8: "vegetation",
+    9: "terrain",
+    10: "sky",
+    11: "person",
+    12: "rider",
+    13: "car",
+    14: "truck",
+    15: "bus",
+    16: "train",
+    17: "motorcycle",
+    18: "bicycle"
+}
+
+NUM_CITYSCAPES_CLASSES = len(CITYSCAPES_CLASSES)
+
 
 class TrainingLogger:
-    """Handles all training and validation logging to WandB."""
+    """Handles all training and validation logging to WandB for Cityscapes dataset."""
     
-    def __init__(self, class_names):
-        self.class_names = class_names
+    def __init__(self):
+        self.class_names = CITYSCAPES_CLASSES
         
     def log_confusion_matrix(self, cm, title, epoch):
         """Log confusion matrix to WandB with proper formatting."""
@@ -73,24 +97,20 @@ class TrainingLogger:
         wandb.log({title: plt, "epoch": epoch})
         plt.close(fig)
     
-    def log_images(self, batch, predictions, dataset, phase, epoch):
+    def log_images(self, batch, predictions, phase, epoch):
         """Log input images, ground truth, and predictions to WandB."""
         log_dict = {
             "epoch": epoch,
             f"input_{phase}": wandb.Image(batch["image"][-5:].detach().cpu()),
-            f"ground_truth_{phase}": wandb.Image(batch["seg"][-5:].detach().cpu()),
+            f"ground_truth_{phase}": wandb.Image(batch["label"][-5:].detach().cpu()),
         }
         
         if predictions.dim() == 5:  # Multiple samples from VAE
             # Average predictions across samples
             avg_predictions = torch.mean(predictions.detach().cpu(), 0)
-            log_dict[f"prediction_{phase}"] = wandb.Image(
-                dataset.prMask_to_color(avg_predictions[-5:])
-            )
+            log_dict[f"prediction_{phase}"] = wandb.Image(avg_predictions[-5:])
         else:
-            log_dict[f"prediction_{phase}"] = wandb.Image(
-                dataset.prMask_to_color(predictions[-5:].detach().cpu())
-            )
+            log_dict[f"prediction_{phase}"] = wandb.Image(predictions[-5:].detach().cpu())
         
         wandb.log(log_dict)
     
@@ -322,8 +342,9 @@ def validate_epoch(model, val_loader, device, logger, epoch, configs):
 
 def save_checkpoint(model, optimizer, epoch, tr_metrics, val_metrics, configs, checkpoint_type):
     """Save model checkpoint with all necessary information."""
-    if not os.path.exists(configs.model_add):
-        Path(configs.model_add).mkdir(parents=True)
+    model_dir = getattr(configs, 'model_add', './checkpoints')
+    if not os.path.exists(model_dir):
+        Path(model_dir).mkdir(parents=True)
     
     checkpoint = {
         "epoch": epoch,
@@ -331,96 +352,112 @@ def save_checkpoint(model, optimizer, epoch, tr_metrics, val_metrics, configs, c
         "optimizer_state_dict": optimizer.state_dict(),
         "tr_loss": tr_metrics,
         "val_loss": val_metrics,
-        "hyper_params": json.dumps(configs.config_dict),
+        "hyper_params": json.dumps(configs.config_dict if hasattr(configs, 'config_dict') else vars(configs)),
     }
     
-    checkpoint_path = os.path.join(configs.model_add, f"{checkpoint_type}.pth")
+    checkpoint_path = os.path.join(model_dir, f"{checkpoint_type}.pth")
     torch.save(checkpoint, checkpoint_path)
     print(f"Checkpoint saved: {checkpoint_path}")
 
 
 def train(configs: ConfigManager):
-    """Main training function with comprehensive logging and VAE sampling preservation."""
+    """Main training function for Cityscapes dataset with comprehensive logging and VAE sampling preservation."""
     
     # Initialize WandB
-    if configs.continue_tra.enable:
+    if hasattr(configs, 'continue_tra') and configs.continue_tra.enable:
         wandb.init(
-            config=json.dumps(configs.config_dict),
-            project=configs.project_name,
-            entity=configs.entity,
-            name=configs.run_name,
+            config=configs.config_dict if hasattr(configs, 'config_dict') else vars(configs),
+            project=getattr(configs, 'project_name', 'FrictionSegNet'),
+            entity=getattr(configs, 'entity', None),
+            name=getattr(configs, 'run_name', 'cityscapes_training'),
             resume="must",
             id=configs.continue_tra.wandb_id,
         )
         print("WandB resumed...")
     else:
         wandb.init(
-            config=asdict(configs),
-            project=configs.project_name,
-            entity=configs.entity,
-            name=configs.run_name,
+            config=configs.config_dict if hasattr(configs, 'config_dict') else vars(configs),
+            project=getattr(configs, 'project_name', 'FrictionSegNet'),
+            entity=getattr(configs, 'entity', None),
+            name=getattr(configs, 'run_name', 'cityscapes_training'),
             resume="allow",
         )
     
-    # Setup datasets
-    tra_datasets = []
-    val_datasets = []
-    
-    tra_datasets.append(
-        CityscapesDataset(dataset_config=configs.datasetConfig, mode="train")
+    # Setup Cityscapes datasets
+    train_dataset = CityscapesDataset(
+        root_dir=getattr(configs, 'cityscapes_root', './datasets/Cityscapes'),
+        img_size=getattr(configs, 'img_size', (512, 1024)),
+        split='train',
+        mode='fine',
+        target_type='semantic'
     )
-    val_datasets.append(
-        CityscapesDataset(dataset_config=configs.datasetConfig, mode="val")
-    )
-    print("Cityscapes dataset added!")
     
-    train_dev_sets = ConcatDataset(tra_datasets)
-    val_dev_sets = ConcatDataset(val_datasets)
+    val_dataset = CityscapesDataset(
+        root_dir=getattr(configs, 'cityscapes_root', './datasets/Cityscapes'),
+        img_size=getattr(configs, 'img_size', (512, 1024)),
+        split='val',
+        mode='fine',
+        target_type='semantic'
+    )
+    
+    print(f"Cityscapes dataset loaded!")
+    print(f"Training samples: {len(train_dataset)}")
+    print(f"Validation samples: {len(val_dataset)}")
     
     # Setup data loaders
     train_loader = DataLoader(
-        dataset=train_dev_sets,
-        batch_size=configs.batch_size,
+        dataset=train_dataset,
+        batch_size=getattr(configs, 'batch_size', 4),
         shuffle=True,
         drop_last=True,
+        num_workers=getattr(configs, 'num_workers', 4)
     )
     val_loader = DataLoader(
-        dataset=val_dev_sets,
-        batch_size=configs.batch_size,
-        shuffle=True,
+        dataset=val_dataset,
+        batch_size=getattr(configs, 'batch_size', 4),
+        shuffle=False,
         drop_last=True,
+        num_workers=getattr(configs, 'num_workers', 4)
     )
     
     # Setup device
-    if configs.device == "cpu":
+    device_type = getattr(configs, 'device', 'cpu')
+    if device_type == "cpu":
         device = torch.device("cpu")
         print("Running on the CPU")
-    elif configs.device == "gpu":
-        device = torch.device(configs.device_name)
-        print("Running on the GPU")
+    elif device_type == "gpu" or device_type == "cuda":
+        device_name = getattr(configs, 'device_name', 'cuda:0')
+        device = torch.device(device_name if torch.cuda.is_available() else 'cpu')
+        print(f"Running on device: {device}")
+    else:
+        device = torch.device("cpu")
+        print("Default to CPU")
     
-    # Initialize model with VAE latent space sampling preserved
+    # Initialize model with VAE latent space sampling preserved for Cityscapes
+    geco_config = getattr(configs, 'GECO', {'enable': False})
     model = ProUNet(
-        gecoConfig=configs.GECO,
-        num_classes=tra_datasets[0].get_num_classes(),
-        LatentVarSize=configs.latent_dim,
-        beta=configs.beta,
+        gecoConfig=geco_config,
+        num_classes=NUM_CITYSCAPES_CLASSES,
+        LatentVarSize=getattr(configs, 'latent_dim', 6),
+        beta=getattr(configs, 'beta', 1.0),
         training=True,
-        num_samples=configs.num_samples,
+        num_samples=getattr(configs, 'num_samples', 16),
         device=device,
     )
     
     # Load model state if continuing training or using pretrained
-    if configs.continue_tra.enable:
+    if hasattr(configs, 'continue_tra') and configs.continue_tra.enable:
+        model_path = getattr(configs, 'model_add', './checkpoints')
         checkpoint = torch.load(
-            configs.model_add / f"{configs.continue_tra.which_model}.pth",
+            os.path.join(model_path, f"{configs.continue_tra.which_model}.pth"),
             map_location=device,
         )
         model.load_state_dict(checkpoint["model_state_dict"])
         print("Model state dict loaded...")
-    elif configs.pretrained.enable:
+    elif hasattr(configs, 'pretrained') and configs.pretrained.enable:
+        pretrained_path = getattr(configs.pretrained, 'model_add', './pretrained')
         checkpoint = torch.load(
-            configs.pretrained.model_add / f"{configs.pretrained.which_model}.pth",
+            os.path.join(pretrained_path, f"{configs.pretrained.which_model}.pth"),
             map_location=device,
         )
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -430,28 +467,30 @@ def train(configs: ConfigManager):
     
     # Setup optimizer
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=configs.learning_rate, weight_decay=configs.momentum
+        model.parameters(), 
+        lr=getattr(configs, 'learning_rate', 1e-4), 
+        weight_decay=getattr(configs, 'momentum', 1e-5)
     )
     
     # Load optimizer state if continuing training
-    if configs.continue_tra.enable:
+    if hasattr(configs, 'continue_tra') and configs.continue_tra.enable and 'checkpoint' in locals():
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         print("Optimizer state dict loaded...")
     
-    # Initialize logger
-    logger = TrainingLogger(classIds)
+    # Initialize logger for Cityscapes
+    logger = TrainingLogger()
     
     # Setup training parameters
     best_val = -1
-    val_every = 2
+    val_every = getattr(configs, 'val_every', 2)
     wandb.watch(model)
     
     start_epoch = 0
-    if configs.continue_tra.enable:
+    if hasattr(configs, 'continue_tra') and configs.continue_tra.enable and 'checkpoint' in locals():
         start_epoch = checkpoint["epoch"] + 1
     
-    end_epoch = configs.epochs
-    total = configs.epochs
+    end_epoch = getattr(configs, 'epochs', 100)
+    total = end_epoch
     
     # Main training loop
     with tqdm(
@@ -475,7 +514,7 @@ def train(configs: ConfigManager):
             
             # Log training images
             logger.log_images(
-                train_batch, train_predictions, tra_datasets[0], "training", epoch + 1
+                train_batch, train_predictions, "training", epoch + 1
             )
             
             # Log training confusion matrix
@@ -498,7 +537,7 @@ def train(configs: ConfigManager):
                 
                 # Log validation images
                 logger.log_images(
-                    val_batch, val_predictions, tra_datasets[0], "validation", epoch + 1
+                    val_batch, val_predictions, "validation", epoch + 1
                 )
                 
                 # Log validation confusion matrix
@@ -532,7 +571,63 @@ def train(configs: ConfigManager):
     save_checkpoint(model, optimizer, end_epoch - 1, tr_metrics, val_metrics, configs, "final")
 
 
+class SimpleConfig:
+    """Simple configuration class for Cityscapes training."""
+    def __init__(self):
+        # Dataset configuration
+        self.cityscapes_root = './datasets/Cityscapes'
+        self.img_size = (512, 1024)
+        
+        # Training configuration
+        self.batch_size = 4
+        self.num_workers = 4
+        self.epochs = 100
+        self.learning_rate = 1e-4
+        self.momentum = 1e-5
+        self.val_every = 2
+        
+        # Model configuration
+        self.latent_dim = 6
+        self.beta = 1.0
+        self.num_samples = 16
+        
+        # Device configuration
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device_name = 'cuda:0'
+        
+        # Logging configuration
+        self.project_name = 'FrictionSegNet-Cityscapes'
+        self.entity = None
+        self.run_name = 'cityscapes_training'
+        
+        # Checkpoint configuration
+        self.model_add = './checkpoints'
+        
+        # GECO configuration
+        self.GECO = {'enable': False}
+
+
 if __name__ == "__main__":
-    # This would typically load configs from a configuration file
-    # For now, we'll assume configs are passed to the train function
-    print("Training script loaded. Call train(configs) to start training.")
+    # Example usage with simple configuration
+    print("FrictionSegNet Training Script for Cityscapes Dataset")
+    print("=" * 60)
+    
+    # Create simple configuration
+    configs = SimpleConfig()
+    
+    print("Configuration:")
+    print(f"  Dataset root: {configs.cityscapes_root}")
+    print(f"  Image size: {configs.img_size}")
+    print(f"  Batch size: {configs.batch_size}")
+    print(f"  Epochs: {configs.epochs}")
+    print(f"  Learning rate: {configs.learning_rate}")
+    print(f"  Device: {configs.device}")
+    print(f"  VAE latent dim: {configs.latent_dim}")
+    print(f"  VAE samples: {configs.num_samples}")
+    print(f"  Cityscapes classes: {NUM_CITYSCAPES_CLASSES}")
+    
+    print("\nTo start training, call:")
+    print("  train(configs)")
+    
+    # Uncomment the line below to start training immediately
+    # train(configs)
