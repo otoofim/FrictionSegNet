@@ -1,29 +1,11 @@
 [project]
 name = "frictionsegnet"
 version = "0.1.0"
-description = ""
-authors = [
-    {name = "wsmo6", email = "m.otoofi@lboro.ac.uk"}
-]
+description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
-    "torch>=2.5.1,<3.0.0",
-    "torchvision>=0.20.1,<0.21.0",
-    "torchaudio>=2.5.1,<3.0.0",
-    "cityscapesscripts>=2.2.4,<3.0.0",
-    "numpy>=1.26.0",
-    "pillow==9.4",
-    "pyyaml>=6.0.2,<7.0.0",
-    "torchmetrics>=1.7.0,<2.0.0",
-    "wandb>=0.19.9,<0.20.0",
-    "crfseg>=1.0.0,<2.0.0",
-    "scikit-learn>=1.6.1,<2.0.0"
+    "cityscapesscripts>=2.2.4",
+    "torch",
+    "torchvision",
 ]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["probabilistic_unet"]
