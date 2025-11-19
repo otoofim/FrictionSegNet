@@ -7,5 +7,6 @@ requires-python = ">=3.12"
 dependencies = [
     "cityscapesscripts>=2.2.4",
     "torch",
+    "torchcrf>=1.1.0",
     "torchvision",
 ]

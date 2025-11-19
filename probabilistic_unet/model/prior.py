@@ -1,179 +1,150 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
-import numpy as np
-from torch.distributions import Normal, Independent, kl
-import torchvision
-import torchvision.transforms as T
 import torch.nn.functional as F
-from torch.distributions import Normal, Independent, kl, MultivariateNormal
-from probabilistic_unet.model.unet_blocks import *
-from crfseg import CRF
-
+from probabilistic_unet.model.unet_blocks import DownConvBlock, UpConvBlock
+from TorchCRF import CRF
 
 
 class TempSoftmax(nn.Module):
-    def __init__(self, temperature, dim = 1):
+    def __init__(self, temperature, dim=1):
         super(TempSoftmax, self).__init__()
-        
         self.temperature = temperature
-        self.softmax = nn.Softmax(dim = dim)
-        
+        self.softmax = nn.Softmax(dim=dim)
+
     def forward(self, inp):
-        
         scaled_logits = inp / self.temperature
         softmax_output = self.softmax(scaled_logits)
-
         return softmax_output
 
-
-class prior(nn.Module):
+class Prior(nn.Module):
     """
-    A block consists of an upsampling layer followed by a convolutional layer to reduce the amount of channels and then a DownConvBlock
-    If bilinear is set to false, we do a transposed convolution instead of upsampling
+    A dynamic prior model with configurable architecture.
     """
-    def __init__(self, num_samples, num_classes, LatentVarSize = 6):
-        super(prior, self).__init__()
-        #Vars init
-        self.LatentVarSize = LatentVarSize
+    def __init__(self, num_samples, num_classes, latent_var_size=6, input_dim=3, base_channels=128, num_res_layers=2, activation=nn.ReLU):
+        super(Prior, self).__init__()
+        self.latent_var_size = latent_var_size
         self.num_samples = num_samples
         self.num_classes = num_classes
 
-        
-        #architecture
-        self.DownConvBlock1 = DownConvBlock(input_dim = 3, output_dim = 128, ResLayers = 2, padding = 1)
-        self.DownConvBlock2 = DownConvBlock(input_dim = 128, output_dim = 256, ResLayers = 2, padding = 1)
-        self.DownConvBlock3 = DownConvBlock(input_dim = 256, output_dim = 512, ResLayers = 2, padding = 1)
-        self.DownConvBlock4 = DownConvBlock(input_dim = 512, output_dim = 256, ResLayers = 2, latent_dim = LatentVarSize, padding = 1)
+        # Architecture
+        self.down_blocks = nn.ModuleList([
+            DownConvBlock(input_dim=input_dim, output_dim=base_channels, num_res_layers=num_res_layers, activation=activation),
+            DownConvBlock(input_dim=base_channels, output_dim=base_channels * 2, num_res_layers=num_res_layers, activation=activation),
+            DownConvBlock(input_dim=base_channels * 2, output_dim=base_channels * 4, num_res_layers=num_res_layers, activation=activation),
+            DownConvBlock(input_dim=base_channels * 4, output_dim=base_channels * 2, latent_dim=latent_var_size, num_res_layers=num_res_layers, activation=activation)
+        ])
 
-        self.UpConvBlock1 = UpConvBlock(input_dim = 256, output_dim = 512, ResLayers = 2, padding = 1)
-        self.UpConvBlock2 = UpConvBlock(input_dim = (512 * 2) + LatentVarSize, output_dim = 256, ResLayers = 2, latent_dim = LatentVarSize, padding = 1)
-        self.UpConvBlock3 = UpConvBlock(input_dim = (256 * 2) + LatentVarSize, output_dim = 128, ResLayers = 2, latent_dim = LatentVarSize, padding = 1)
-        self.UpConvBlock4 = UpConvBlock(input_dim = (128 * 2) + LatentVarSize, output_dim = self.num_classes, ResLayers = 2, padding = 1)
-        
-        self.regressionLayer = UpConvBlock(input_dim = (128 * 2) + LatentVarSize, output_dim = 1, ResLayers = 2, padding = 1)
+        self.up_blocks = nn.ModuleList([
+            UpConvBlock(input_dim=base_channels * 2, output_dim=base_channels * 4, num_res_layers=num_res_layers, activation=activation),
+            UpConvBlock(input_dim=(base_channels * 4) + latent_var_size, output_dim=base_channels * 2, latent_dim=latent_var_size, num_res_layers=num_res_layers, activation=activation),
+            UpConvBlock(input_dim=(base_channels * 2) + latent_var_size, output_dim=base_channels, latent_dim=latent_var_size, num_res_layers=num_res_layers, activation=activation),
+            UpConvBlock(input_dim=(base_channels) + latent_var_size, output_dim=num_classes, num_res_layers=num_res_layers, activation=activation)
+        ])
+
         self.softmax = nn.Softmax(dim=1)
-        self.crf = CRF(n_spatial_dims=2, returns = "logits", requires_grad = True)
-        
+        self.crf = CRF(num_classes)
 
-        
-    def forward(self, inputFeatures, postDist):
-        
+    def forward(self, input_features, post_dist):
         dists = {}
-        encoderOuts = {}
-        
-        encoderOuts["out1"] = self.DownConvBlock1(inputFeatures)
-        encoderOuts["out2"] = F.dropout2d(self.DownConvBlock2(encoderOuts["out1"]), p = 0.5, training = True, inplace = False)
-        encoderOuts["out3"] = F.dropout2d(self.DownConvBlock3(encoderOuts["out2"]), p = 0.3, training = True, inplace = False)
-        encoderOuts["out4"], dists["dist1"] = self.DownConvBlock4(encoderOuts["out3"])
-        
+        encoder_outs = {}
 
-        out = self.UpConvBlock1(encoderOuts["out4"])
-        latent1 = torch.nn.Upsample(size=encoderOuts["out3"].shape[2:], mode='nearest')(postDist["dist1"].rsample())
-        out = torch.cat((encoderOuts["out3"], out, latent1), 1)
+        # Downsampling
+        for i, block in enumerate(self.down_blocks):
+            if i == 0:
+                encoder_outs[f"out{i+1}"] = block(input_features)
+            else:
+                encoder_outs[f"out{i+1}"] = F.dropout2d(block(encoder_outs[f"out{i}"]), p=0.5 if i == 1 else 0.3, training=self.training)
 
-        out = F.dropout2d(out, p = 0.5, training = True, inplace = False)
-        out, dists["dist2"] = self.UpConvBlock2(out)
-        latent2 = torch.nn.Upsample(size=encoderOuts["out2"].shape[2:], mode='nearest')(postDist["dist2"].rsample())
-        out = torch.cat((encoderOuts["out2"], out, latent2), 1)
+        encoder_outs["out4"], dists["dist1"] = self.down_blocks[-1](encoder_outs["out3"])
 
-        out = F.dropout2d(out, p = 0.5, training = True, inplace = False)
-        out, dists["dist3"] = self.UpConvBlock3(out)
-        latent3 =  torch.nn.Upsample(size=encoderOuts["out1"].shape[2:], mode='nearest')(postDist["dist3"].rsample())
-        out = torch.cat((encoderOuts["out1"], out, latent3), 1)
-            
-        
-        segs = self.UpConvBlock4(out)
+        # Upsampling
+        out = self.up_blocks[0](encoder_outs["out4"])
+        for i in range(1, len(self.up_blocks)):
+            latent = torch.nn.Upsample(size=encoder_outs[f"out{3-i}"].shape[2:], mode='nearest')(post_dist[f"dist{i}"].rsample())
+            out = torch.cat((encoder_outs[f"out{3-i}"], out, latent), 1)
+            out = F.dropout2d(out, p=0.5, training=self.training)
+            out, dists[f"dist{i+1}"] = self.up_blocks[i](out)
+
+        segs = self.up_blocks[-1](out)
         segs = self.crf(segs)
         segs = self.softmax(segs)
-        fric = self.regressionLayer(out)
-        
-        return segs, dists, fric
-    
-    
-    
-    def inference(self, inputFeatures):
-        
+        return segs, dists
+
+    def inference(self, input_features):
         with torch.no_grad():
             dists = {}
-            encoderOuts = {}
+            encoder_outs = {}
             samples = []
-            samplesFri = []
+            samples_fric = []
 
-            encoderOuts["out1"] = self.DownConvBlock1(inputFeatures)
-            encoderOuts["out2"] = self.DownConvBlock2(encoderOuts["out1"])
-            encoderOuts["out3"] = self.DownConvBlock3(encoderOuts["out2"])
-            encoderOuts["out4"], dists["dist1"] = self.DownConvBlock4(encoderOuts["out3"])
+            # Downsampling
+            for i, block in enumerate(self.down_blocks):
+                if i == 0:
+                    encoder_outs[f"out{i+1}"] = block(input_features)
+                else:
+                    encoder_outs[f"out{i+1}"] = block(encoder_outs[f"out{i}"])
 
+            encoder_outs["out4"], dists["dist1"] = self.down_blocks[-1](encoder_outs["out3"])
+
+            # Sampling
             for _ in range(self.num_samples):
+                out = self.up_blocks[0](encoder_outs["out4"])
+                for i in range(1, len(self.up_blocks)):
+                    latent = torch.nn.Upsample(size=encoder_outs[f"out{3-i}"].shape[2:], mode='nearest')(dists[f"dist{i}"].sample())
+                    out = torch.cat((encoder_outs[f"out{3-i}"], out, latent), 1)
+                    if f"dist{i+1}" not in dists:
+                        out, dists[f"dist{i+1}"] = self.up_blocks[i](out)
+                    else:
+                        out, _ = self.up_blocks[i](out)
 
-                out = self.UpConvBlock1(encoderOuts["out4"])
-                latent1 = torch.nn.Upsample(size=encoderOuts["out3"].shape[2:], mode='nearest')(dists["dist1"].sample())
-                out = torch.cat((encoderOuts["out3"], out, latent1), 1)
-                
-                if "dist2" not in dists.keys():
-                    out, dists["dist2"] = self.UpConvBlock2(out)
-                else:
-                    out, _ = self.UpConvBlock2(out)
-                latent2 = torch.nn.Upsample(size=encoderOuts["out2"].shape[2:], mode='nearest')(dists["dist2"].sample())
-                out = torch.cat((encoderOuts["out2"], out, latent2), 1)
-
-                
-                if "dist3" not in dists.keys():
-                    out, dists["dist3"] = self.UpConvBlock3(out)
-                else:
-                    out, _ = self.UpConvBlock3(out)
-                latent3 =  torch.nn.Upsample(size=encoderOuts["out1"].shape[2:], mode='nearest')(dists["dist3"].sample())
-                out = torch.cat((encoderOuts["out1"], out, latent3), 1)
-
-                segs = self.UpConvBlock4(out)
+                segs = self.up_blocks[-1](out)
                 segs = self.crf(segs)
                 segs = self.softmax(segs)
-                fric = self.regressionLayer(out)
 
                 samples.append(segs)
-                samplesFri.append(fric)
-        
-        
-        return torch.stack(samples), dists, torch.stack(samplesFri)
-
-
-
-    def latentVisualize(self, inputFeatures, sampleLatent1 = None, sampleLatent2 = None, sampleLatent3 = None):
-        
-        dists = {}
-        encoderOuts = {}
-        samples = []
-        samplesFri = []
-        
-        encoderOuts["out1"] = self.DownConvBlock1(inputFeatures)
-        encoderOuts["out2"] = F.dropout2d(self.DownConvBlock2(encoderOuts["out1"]), p = 0.5, training = True, inplace = False)
-        encoderOuts["out3"] = F.dropout2d(self.DownConvBlock3(encoderOuts["out2"]), p = 0.3, training = True, inplace = False)
-        encoderOuts["out4"], dists["dist1"] = self.DownConvBlock4(encoderOuts["out3"])
-        
-        for _ in range(self.num_samples):
-            out = self.UpConvBlock1(encoderOuts["out4"])
-            latent1 = torch.nn.Upsample(size=encoderOuts["out3"].shape[2:], mode='nearest')(dists["dist1"].rsample() if sampleLatent1 is None else sampleLatent1)
-            out = torch.cat((encoderOuts["out3"], out, latent1), 1)
-
-            out = F.dropout2d(out, p = 0.5, training = True, inplace = False)
-            out, dists["dist2"] = self.UpConvBlock2(out)
-            latent2 = torch.nn.Upsample(size=encoderOuts["out2"].shape[2:], mode='nearest')(dists["dist2"].rsample() if sampleLatent2 is None else sampleLatent2)
-            out = torch.cat((encoderOuts["out2"], out, latent2), 1)
-
-            out = F.dropout2d(out, p = 0.5, training = True, inplace = False)
-            out, dists["dist3"] = self.UpConvBlock3(out)
-            latent3 =  torch.nn.Upsample(size=encoderOuts["out1"].shape[2:], mode='nearest')(dists["dist3"].rsample() if sampleLatent3 is None else sampleLatent3)
-            out = torch.cat((encoderOuts["out1"], out, latent3), 1)
                 
-            
-            segs = self.UpConvBlock4(out)
+        return torch.stack(samples), dists, torch.stack(samples_fric)
+
+    def latentVisualize(self, input_features, sample_latent1=None, sample_latent2=None, sample_latent3=None):
+        """
+        Visualize the latent space by sampling or using provided latent variables.
+        """
+        dists = {}
+        encoder_outs = {}
+        samples = []
+
+        # Downsampling
+        encoder_outs["out1"] = self.down_blocks[0](input_features)
+        encoder_outs["out2"] = F.dropout2d(self.down_blocks[1](encoder_outs["out1"]), p=0.5, training=self.training)
+        encoder_outs["out3"] = F.dropout2d(self.down_blocks[2](encoder_outs["out2"]), p=0.3, training=self.training)
+        encoder_outs["out4"], dists["dist1"] = self.down_blocks[3](encoder_outs["out3"])
+
+        # Sampling and visualization
+        for _ in range(self.num_samples):
+            out = self.up_blocks[0](encoder_outs["out4"])
+            latent1 = torch.nn.Upsample(size=encoder_outs["out3"].shape[2:], mode='nearest')(
+                dists["dist1"].rsample() if sample_latent1 is None else sample_latent1
+            )
+            out = torch.cat((encoder_outs["out3"], out, latent1), 1)
+
+            out = F.dropout2d(out, p=0.5, training=self.training)
+            out, dists["dist2"] = self.up_blocks[1](out)
+            latent2 = torch.nn.Upsample(size=encoder_outs["out2"].shape[2:], mode='nearest')(
+                dists["dist2"].rsample() if sample_latent2 is None else sample_latent2
+            )
+            out = torch.cat((encoder_outs["out2"], out, latent2), 1)
+
+            out = F.dropout2d(out, p=0.5, training=self.training)
+            out, dists["dist3"] = self.up_blocks[2](out)
+            latent3 = torch.nn.Upsample(size=encoder_outs["out1"].shape[2:], mode='nearest')(
+                dists["dist3"].rsample() if sample_latent3 is None else sample_latent3
+            )
+            out = torch.cat((encoder_outs["out1"], out, latent3), 1)
+
+            segs = self.up_blocks[3](out)
             segs = self.crf(segs)
             segs = self.softmax(segs)
-            fric = self.regressionLayer(out)
-
 
             samples.append(segs)
-            samplesFri.append(fric)
-        
-        return torch.stack(samples), dists, torch.stack(samplesFri)
+
+        return torch.stack(samples), dists
