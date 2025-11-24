@@ -4,18 +4,6 @@ import torch.nn.functional as F
 from probabilistic_unet.model.unet_blocks import DownConvBlock, UpConvBlock
 from TorchCRF import CRF
 
-
-class TempSoftmax(nn.Module):
-    def __init__(self, temperature, dim=1):
-        super(TempSoftmax, self).__init__()
-        self.temperature = temperature
-        self.softmax = nn.Softmax(dim=dim)
-
-    def forward(self, inp):
-        scaled_logits = inp / self.temperature
-        softmax_output = self.softmax(scaled_logits)
-        return softmax_output
-
 class Prior(nn.Module):
     """
     A dynamic prior model with configurable architecture.
@@ -75,7 +63,6 @@ class Prior(nn.Module):
             dists = {}
             encoder_outs = {}
             samples = []
-            samples_fric = []
 
             # Downsampling
             for i, block in enumerate(self.down_blocks):
@@ -90,8 +77,28 @@ class Prior(nn.Module):
             for _ in range(self.num_samples):
                 out = self.up_blocks[0](encoder_outs["out4"])
                 for i in range(1, len(self.up_blocks)):
-                    latent = torch.nn.Upsample(size=encoder_outs[f"out{3-i}"].shape[2:], mode='nearest')(dists[f"dist{i}"].sample())
-                    out = torch.cat((encoder_outs[f"out{3-i}"], out, latent), 1)
+                    latent = dists[f"dist{i}"].sample()
+                    
+                    # Get the three tensors
+                    encoder_skip = encoder_outs[f"out{3-i}"]
+                    
+                    # Find the largest spatial dimensions among the three
+                    shapes = [encoder_skip.shape[2:], latent.shape[2:], out.shape[2:]]
+                    max_h = max(s[0] for s in shapes)
+                    max_w = max(s[1] for s in shapes)
+                    target_size = (max_h, max_w)
+                    
+                    # Upsample all three to the largest size
+                    encoder_skip = F.interpolate(encoder_skip, size=target_size, mode='bilinear', align_corners=False)
+                    latent = F.interpolate(latent, size=target_size, mode='nearest')
+                    out = F.interpolate(out, size=target_size, mode='bilinear', align_corners=False)
+                    
+                    # Concatenate
+                    out = torch.cat((encoder_skip, out, latent), dim=1)
+                    
+                    # Pass through this decoder block
+                    out = self.up_blocks[i](out)
+                    
                     if f"dist{i+1}" not in dists:
                         out, dists[f"dist{i+1}"] = self.up_blocks[i](out)
                     else:
@@ -102,8 +109,8 @@ class Prior(nn.Module):
                 segs = self.softmax(segs)
 
                 samples.append(segs)
-                
-        return torch.stack(samples), dists, torch.stack(samples_fric)
+
+        return torch.stack(samples), dists
 
     def latentVisualize(self, input_features, sample_latent1=None, sample_latent2=None, sample_latent3=None):
         """
