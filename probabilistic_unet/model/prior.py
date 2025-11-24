@@ -93,6 +93,7 @@ class Prior(nn.Module):
     def forward(self, input_features, post_dist):
         dists = {}
         encoder_outs = {}
+        dist_counter = 1
 
         # Downsampling
         for i, block in enumerate(self.down_blocks):
@@ -105,43 +106,87 @@ class Prior(nn.Module):
                     training=self.training,
                 )
 
-        encoder_outs["out4"], dists["dist1"] = self.down_blocks[-1](
-            encoder_outs["out3"]
-        )
+        # Handle last down_block if it has latent_dim
+        if self.down_blocks[-1].latent_dim is not None:
+            encoder_outs[f"out{len(self.down_blocks)}"], dists[f"dist{dist_counter}"] = self.down_blocks[-1](
+                encoder_outs[f"out{len(self.down_blocks) - 1}"]
+            )
+            dist_counter += 1
+        else:
+            encoder_outs[f"out{len(self.down_blocks)}"] = self.down_blocks[-1](
+                encoder_outs[f"out{len(self.down_blocks) - 1}"]
+            )
 
-        # Upsampling
-        out = self.up_blocks[0](encoder_outs["out4"])
+        # Upsampling - First block (no skip connection, no latent)
+        result = self.up_blocks[0](encoder_outs[f"out{len(self.down_blocks)}"])
+        if self.up_blocks[0].latent_dim is not None:
+            out, dists[f"dist{dist_counter}"] = result
+            dist_counter += 1
+        else:
+            out = result
+
+        # Remaining up_blocks with skip connections
         for i in range(1, len(self.up_blocks)):
-            latent = post_dist[f"dist{i}"].rsample()
+            # Get encoder skip connection (reverse order)
+            skip_idx = len(self.down_blocks) - i
+            encoder_skip = encoder_outs[f"out{skip_idx}"]
 
-            # Get encoder skip connection
-            encoder_skip = encoder_outs[f"out{3 - i}"]
+            # Check if this block expects latent variable
+            if self.up_blocks[i].latent_dim is not None:
+                # Use latent from posterior
+                latent = post_dist[f"dist{i}"].rsample()
 
-            # Find the largest spatial dimensions among the three
-            shapes = [encoder_skip.shape[2:], latent.shape[2:], out.shape[2:]]
-            max_h = max(s[0] for s in shapes)
-            max_w = max(s[1] for s in shapes)
-            target_size = (max_h, max_w)
+                # Find the largest spatial dimensions among the three
+                shapes = [encoder_skip.shape[2:], latent.shape[2:], out.shape[2:]]
+                max_h = max(s[0] for s in shapes)
+                max_w = max(s[1] for s in shapes)
+                target_size = (max_h, max_w)
 
-            # Upsample all three to the largest size
-            encoder_skip = F.interpolate(
-                encoder_skip,
-                size=target_size,
-                mode="bilinear",
-                align_corners=False,
-            )
-            latent = F.interpolate(latent, size=target_size, mode="nearest")
-            out = F.interpolate(
-                out, size=target_size, mode="bilinear", align_corners=False
-            )
+                # Upsample all three to the largest size
+                encoder_skip = F.interpolate(
+                    encoder_skip,
+                    size=target_size,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                latent = F.interpolate(latent, size=target_size, mode="nearest")
+                out = F.interpolate(
+                    out, size=target_size, mode="bilinear", align_corners=False
+                )
 
-            # Concatenate encoder skip, previous output, and latent
-            out = torch.cat((encoder_skip, out, latent), dim=1)
-            out = F.dropout2d(out, p=0.5, training=self.training)
-            out, dists[f"dist{i + 1}"] = self.up_blocks[i](out)
+                # Concatenate encoder skip, previous output, and latent
+                concatenated = torch.cat((encoder_skip, out, latent), dim=1)
+            else:
+                # No latent expected, just concatenate encoder_skip and out
+                shapes = [encoder_skip.shape[2:], out.shape[2:]]
+                max_h = max(s[0] for s in shapes)
+                max_w = max(s[1] for s in shapes)
+                target_size = (max_h, max_w)
 
-        segs = self.up_blocks[-1](out)
-        segs = self.crf(segs)
+                encoder_skip = F.interpolate(
+                    encoder_skip,
+                    size=target_size,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                out = F.interpolate(
+                    out, size=target_size, mode="bilinear", align_corners=False
+                )
+
+                concatenated = torch.cat((encoder_skip, out), dim=1)
+
+            # Apply dropout and pass through block
+            concatenated = F.dropout2d(concatenated, p=0.5, training=self.training)
+            result = self.up_blocks[i](concatenated)
+
+            # Handle output based on whether block has latent_dim
+            if self.up_blocks[i].latent_dim is not None:
+                out, dists[f"dist{dist_counter}"] = result
+                dist_counter += 1
+            else:
+                out = result
+
+        segs = self.crf(out)
         segs = self.softmax(segs)
         return segs, dists
 
@@ -150,6 +195,7 @@ class Prior(nn.Module):
             dists = {}
             encoder_outs = {}
             samples = []
+            dist_counter = 1
 
             # Downsampling
             for i, block in enumerate(self.down_blocks):
@@ -158,52 +204,91 @@ class Prior(nn.Module):
                 else:
                     encoder_outs[f"out{i + 1}"] = block(encoder_outs[f"out{i}"])
 
-            encoder_outs["out4"], dists["dist1"] = self.down_blocks[-1](
-                encoder_outs["out3"]
-            )
+            # Handle last down_block if it has latent_dim
+            if self.down_blocks[-1].latent_dim is not None:
+                encoder_outs[f"out{len(self.down_blocks)}"], dists[f"dist{dist_counter}"] = self.down_blocks[-1](
+                    encoder_outs[f"out{len(self.down_blocks) - 1}"]
+                )
+                dist_counter += 1
+            else:
+                encoder_outs[f"out{len(self.down_blocks)}"] = self.down_blocks[-1](
+                    encoder_outs[f"out{len(self.down_blocks) - 1}"]
+                )
 
-            # Sampling
+            # Sampling loop
             for _ in range(self.num_samples):
-                out = self.up_blocks[0](encoder_outs["out4"])
+                # First up_block (no skip connection)
+                result = self.up_blocks[0](encoder_outs[f"out{len(self.down_blocks)}"])
+                if self.up_blocks[0].latent_dim is not None:
+                    out, new_dist = result
+                    if _ == 0:  # Only store dist on first sample
+                        dists[f"dist{dist_counter}"] = new_dist
+                else:
+                    out = result
+
+                # Remaining up_blocks with skip connections
                 for i in range(1, len(self.up_blocks)):
-                    # Sample latent variable if not already sampled
-                    if f"dist{i}" not in dists:
-                        # This shouldn't happen in normal flow, but handle it
-                        raise RuntimeError(f"Distribution dist{i} not found")
+                    # Get encoder skip connection (reverse order)
+                    skip_idx = len(self.down_blocks) - i
+                    encoder_skip = encoder_outs[f"out{skip_idx}"]
 
-                    latent = dists[f"dist{i}"].sample()
+                    # Check if this block expects latent variable
+                    if self.up_blocks[i].latent_dim is not None:
+                        # Sample latent from the distribution
+                        latent = dists[f"dist{i}"].sample()
 
-                    # Get encoder skip connection
-                    encoder_skip = encoder_outs[f"out{3 - i}"]
+                        # Find the largest spatial dimensions among the three
+                        shapes = [encoder_skip.shape[2:], latent.shape[2:], out.shape[2:]]
+                        max_h = max(s[0] for s in shapes)
+                        max_w = max(s[1] for s in shapes)
+                        target_size = (max_h, max_w)
 
-                    # Find the largest spatial dimensions among the three
-                    shapes = [encoder_skip.shape[2:], latent.shape[2:], out.shape[2:]]
-                    max_h = max(s[0] for s in shapes)
-                    max_w = max(s[1] for s in shapes)
-                    target_size = (max_h, max_w)
+                        # Upsample all three to the largest size
+                        encoder_skip = F.interpolate(
+                            encoder_skip,
+                            size=target_size,
+                            mode="bilinear",
+                            align_corners=False,
+                        )
+                        latent = F.interpolate(latent, size=target_size, mode="nearest")
+                        out = F.interpolate(
+                            out, size=target_size, mode="bilinear", align_corners=False
+                        )
 
-                    # Upsample all three to the largest size
-                    encoder_skip = F.interpolate(
-                        encoder_skip,
-                        size=target_size,
-                        mode="bilinear",
-                        align_corners=False,
-                    )
-                    latent = F.interpolate(latent, size=target_size, mode="nearest")
-                    out = F.interpolate(
-                        out, size=target_size, mode="bilinear", align_corners=False
-                    )
+                        # Concatenate encoder skip, previous output, and latent
+                        concatenated = torch.cat((encoder_skip, out, latent), dim=1)
+                    else:
+                        # No latent expected, just concatenate encoder_skip and out
+                        shapes = [encoder_skip.shape[2:], out.shape[2:]]
+                        max_h = max(s[0] for s in shapes)
+                        max_w = max(s[1] for s in shapes)
+                        target_size = (max_h, max_w)
 
-                    # Concatenate encoder skip, previous output, and latent
-                    out = torch.cat((encoder_skip, out, latent), dim=1)
+                        encoder_skip = F.interpolate(
+                            encoder_skip,
+                            size=target_size,
+                            mode="bilinear",
+                            align_corners=False,
+                        )
+                        out = F.interpolate(
+                            out, size=target_size, mode="bilinear", align_corners=False
+                        )
 
-                    # Pass through this decoder block and get new distribution
-                    out, dists[f"dist{i + 1}"] = self.up_blocks[i](out)
+                        concatenated = torch.cat((encoder_skip, out), dim=1)
 
-                segs = self.up_blocks[-1](out)
-                segs = self.crf(segs)
+                    # Pass through block
+                    result = self.up_blocks[i](concatenated)
+
+                    # Handle output based on whether block has latent_dim
+                    if self.up_blocks[i].latent_dim is not None:
+                        out, new_dist = result
+                        if _ == 0:  # Only store dist on first sample
+                            dists[f"dist{i + 1}"] = new_dist
+                    else:
+                        out = result
+
+                segs = self.crf(out)
                 segs = self.softmax(segs)
-
                 samples.append(segs)
 
         return torch.stack(samples), dists
