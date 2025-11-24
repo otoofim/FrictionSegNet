@@ -108,9 +108,10 @@ class Prior(nn.Module):
 
         # Handle last down_block if it has latent_dim
         if self.down_blocks[-1].latent_dim is not None:
-            encoder_outs[f"out{len(self.down_blocks)}"], dists[f"dist{dist_counter}"] = self.down_blocks[-1](
-                encoder_outs[f"out{len(self.down_blocks) - 1}"]
-            )
+            (
+                encoder_outs[f"out{len(self.down_blocks)}"],
+                dists[f"dist{dist_counter}"],
+            ) = self.down_blocks[-1](encoder_outs[f"out{len(self.down_blocks) - 1}"])
             dist_counter += 1
         else:
             encoder_outs[f"out{len(self.down_blocks)}"] = self.down_blocks[-1](
@@ -206,7 +207,10 @@ class Prior(nn.Module):
 
             # Handle last down_block if it has latent_dim
             if self.down_blocks[-1].latent_dim is not None:
-                encoder_outs[f"out{len(self.down_blocks)}"], dists[f"dist{dist_counter}"] = self.down_blocks[-1](
+                (
+                    encoder_outs[f"out{len(self.down_blocks)}"],
+                    dists[f"dist{dist_counter}"],
+                ) = self.down_blocks[-1](
                     encoder_outs[f"out{len(self.down_blocks) - 1}"]
                 )
                 dist_counter += 1
@@ -238,7 +242,11 @@ class Prior(nn.Module):
                         latent = dists[f"dist{i}"].sample()
 
                         # Find the largest spatial dimensions among the three
-                        shapes = [encoder_skip.shape[2:], latent.shape[2:], out.shape[2:]]
+                        shapes = [
+                            encoder_skip.shape[2:],
+                            latent.shape[2:],
+                            out.shape[2:],
+                        ]
                         max_h = max(s[0] for s in shapes)
                         max_w = max(s[1] for s in shapes)
                         target_size = (max_h, max_w)
