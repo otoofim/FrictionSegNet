@@ -65,21 +65,27 @@ class Prior(nn.Module):
                     activation=activation,
                 ),
                 UpConvBlock(
-                    input_dim=(base_channels * 4) + latent_var_size,
+                    input_dim=(base_channels * 4)
+                    + (base_channels * 4)
+                    + latent_var_size,  # skip + prev_out + latent
                     output_dim=base_channels * 2,
                     latent_dim=latent_var_size,
                     num_res_layers=num_res_layers,
                     activation=activation,
                 ),
                 UpConvBlock(
-                    input_dim=(base_channels * 2) + latent_var_size,
+                    input_dim=(base_channels * 2)
+                    + (base_channels * 2)
+                    + latent_var_size,  # skip + prev_out + latent
                     output_dim=base_channels,
                     latent_dim=latent_var_size,
                     num_res_layers=num_res_layers,
                     activation=activation,
                 ),
                 UpConvBlock(
-                    input_dim=(base_channels) + latent_var_size,
+                    input_dim=(base_channels)
+                    + (base_channels)
+                    + latent_var_size,  # skip + prev_out + latent
                     output_dim=num_classes,
                     num_res_layers=num_res_layers,
                     activation=activation,
@@ -132,23 +138,33 @@ class Prior(nn.Module):
 
         # Remaining up_blocks with skip connections
         for i in range(1, len(self.up_blocks)):
+            # Get encoder skip connection (reverse order)
+            skip_idx = len(self.down_blocks) - i
+            encoder_skip = encoder_outs[f"out{skip_idx}"]
+
             # All up_blocks after the first need latent variable concatenated
             latent = post_dist[f"dist{i}"].rsample()
 
-            # Find the largest spatial dimensions between latent and out
-            shapes = [latent.shape[2:], out.shape[2:]]
+            # Find the largest spatial dimensions among the three
+            shapes = [encoder_skip.shape[2:], latent.shape[2:], out.shape[2:]]
             max_h = max(s[0] for s in shapes)
             max_w = max(s[1] for s in shapes)
             target_size = (max_h, max_w)
 
-            # Upsample latent and out to the same size
+            # Upsample all three to the largest size
+            encoder_skip = F.interpolate(
+                encoder_skip,
+                size=target_size,
+                mode="bilinear",
+                align_corners=False,
+            )
             latent = F.interpolate(latent, size=target_size, mode="nearest")
             out = F.interpolate(
                 out, size=target_size, mode="bilinear", align_corners=False
             )
 
-            # Concatenate previous output and latent only
-            concatenated = torch.cat((out, latent), dim=1)
+            # Concatenate encoder skip, previous output, and latent
+            concatenated = torch.cat((encoder_skip, out, latent), dim=1)
 
             # Apply dropout and pass through block
             concatenated = F.dropout2d(concatenated, p=0.5, training=self.training)
@@ -206,11 +222,16 @@ class Prior(nn.Module):
 
                 # Remaining up_blocks with skip connections
                 for i in range(1, len(self.up_blocks)):
+                    # Get encoder skip connection (reverse order)
+                    skip_idx = len(self.down_blocks) - i
+                    encoder_skip = encoder_outs[f"out{skip_idx}"]
+
                     # All up_blocks after the first need latent variable concatenated
                     latent = dists[f"dist{i}"].sample()
 
-                    # Find the largest spatial dimensions between latent and out
+                    # Find the largest spatial dimensions among the three
                     shapes = [
+                        encoder_skip.shape[2:],
                         latent.shape[2:],
                         out.shape[2:],
                     ]
@@ -218,14 +239,20 @@ class Prior(nn.Module):
                     max_w = max(s[1] for s in shapes)
                     target_size = (max_h, max_w)
 
-                    # Upsample latent and out to the same size
+                    # Upsample all three to the largest size
+                    encoder_skip = F.interpolate(
+                        encoder_skip,
+                        size=target_size,
+                        mode="bilinear",
+                        align_corners=False,
+                    )
                     latent = F.interpolate(latent, size=target_size, mode="nearest")
                     out = F.interpolate(
                         out, size=target_size, mode="bilinear", align_corners=False
                     )
 
-                    # Concatenate previous output and latent only
-                    concatenated = torch.cat((out, latent), dim=1)
+                    # Concatenate encoder skip, previous output, and latent
+                    concatenated = torch.cat((encoder_skip, out, latent), dim=1)
 
                     # Pass through block
                     result = self.up_blocks[i](concatenated)
