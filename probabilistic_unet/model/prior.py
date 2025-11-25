@@ -95,8 +95,8 @@ class Prior(nn.Module):
         encoder_outs = {}
         dist_counter = 1
 
-        # Downsampling
-        for i, block in enumerate(self.down_blocks):
+        # Downsampling - process all blocks except potentially the last one
+        for i, block in enumerate(self.down_blocks[:-1]):  # Exclude last block
             if i == 0:
                 encoder_outs[f"out{i + 1}"] = block(input_features)
             else:
@@ -106,16 +106,20 @@ class Prior(nn.Module):
                     training=self.training,
                 )
 
-        # Handle last down_block if it has latent_dim
+        # Handle last down_block
+        last_idx = len(self.down_blocks)
         if self.down_blocks[-1].latent_dim is not None:
-            (
-                encoder_outs[f"out{len(self.down_blocks)}"],
-                dists[f"dist{dist_counter}"],
-            ) = self.down_blocks[-1](encoder_outs[f"out{len(self.down_blocks) - 1}"])
+            # Last block has latent_dim, so it returns (out, dist)
+            encoder_outs[f"out{last_idx}"], dists[f"dist{dist_counter}"] = (
+                self.down_blocks[-1](encoder_outs[f"out{last_idx - 1}"])
+            )
             dist_counter += 1
         else:
-            encoder_outs[f"out{len(self.down_blocks)}"] = self.down_blocks[-1](
-                encoder_outs[f"out{len(self.down_blocks) - 1}"]
+            # Last block doesn't have latent_dim, apply dropout as usual
+            encoder_outs[f"out{last_idx}"] = F.dropout2d(
+                self.down_blocks[-1](encoder_outs[f"out{last_idx - 1}"]),
+                p=0.3,
+                training=self.training,
             )
 
         # Upsampling - First block (no skip connection, no latent)
@@ -128,33 +132,23 @@ class Prior(nn.Module):
 
         # Remaining up_blocks with skip connections
         for i in range(1, len(self.up_blocks)):
-            # Get encoder skip connection (reverse order)
-            skip_idx = len(self.down_blocks) - i
-            encoder_skip = encoder_outs[f"out{skip_idx}"]
-
             # All up_blocks after the first need latent variable concatenated
             latent = post_dist[f"dist{i}"].rsample()
 
-            # Find the largest spatial dimensions among the three
-            shapes = [encoder_skip.shape[2:], latent.shape[2:], out.shape[2:]]
+            # Find the largest spatial dimensions between latent and out
+            shapes = [latent.shape[2:], out.shape[2:]]
             max_h = max(s[0] for s in shapes)
             max_w = max(s[1] for s in shapes)
             target_size = (max_h, max_w)
 
-            # Upsample all three to the largest size
-            encoder_skip = F.interpolate(
-                encoder_skip,
-                size=target_size,
-                mode="bilinear",
-                align_corners=False,
-            )
+            # Upsample latent and out to the same size
             latent = F.interpolate(latent, size=target_size, mode="nearest")
             out = F.interpolate(
                 out, size=target_size, mode="bilinear", align_corners=False
             )
 
-            # Concatenate encoder skip, previous output, and latent
-            concatenated = torch.cat((encoder_skip, out, latent), dim=1)
+            # Concatenate previous output and latent only
+            concatenated = torch.cat((out, latent), dim=1)
 
             # Apply dropout and pass through block
             concatenated = F.dropout2d(concatenated, p=0.5, training=self.training)
@@ -167,8 +161,8 @@ class Prior(nn.Module):
             else:
                 out = result
 
-        segs = self.crf(out)
-        segs = self.softmax(segs)
+        # Apply softmax to get probabilities
+        segs = self.softmax(out)
         return segs, dists
 
     def inference(self, input_features):
@@ -212,16 +206,11 @@ class Prior(nn.Module):
 
                 # Remaining up_blocks with skip connections
                 for i in range(1, len(self.up_blocks)):
-                    # Get encoder skip connection (reverse order)
-                    skip_idx = len(self.down_blocks) - i
-                    encoder_skip = encoder_outs[f"out{skip_idx}"]
-
                     # All up_blocks after the first need latent variable concatenated
                     latent = dists[f"dist{i}"].sample()
 
-                    # Find the largest spatial dimensions among the three
+                    # Find the largest spatial dimensions between latent and out
                     shapes = [
-                        encoder_skip.shape[2:],
                         latent.shape[2:],
                         out.shape[2:],
                     ]
@@ -229,20 +218,14 @@ class Prior(nn.Module):
                     max_w = max(s[1] for s in shapes)
                     target_size = (max_h, max_w)
 
-                    # Upsample all three to the largest size
-                    encoder_skip = F.interpolate(
-                        encoder_skip,
-                        size=target_size,
-                        mode="bilinear",
-                        align_corners=False,
-                    )
+                    # Upsample latent and out to the same size
                     latent = F.interpolate(latent, size=target_size, mode="nearest")
                     out = F.interpolate(
                         out, size=target_size, mode="bilinear", align_corners=False
                     )
 
-                    # Concatenate encoder skip, previous output, and latent
-                    concatenated = torch.cat((encoder_skip, out, latent), dim=1)
+                    # Concatenate previous output and latent only
+                    concatenated = torch.cat((out, latent), dim=1)
 
                     # Pass through block
                     result = self.up_blocks[i](concatenated)
@@ -255,8 +238,8 @@ class Prior(nn.Module):
                     else:
                         out = result
 
-                segs = self.crf(out)
-                segs = self.softmax(segs)
+                # Apply softmax to get probabilities
+                segs = self.softmax(out)
                 samples.append(segs)
 
         return torch.stack(samples), dists
@@ -308,7 +291,6 @@ class Prior(nn.Module):
             out = torch.cat((encoder_outs["out1"], out, latent3), 1)
 
             segs = self.up_blocks[3](out)
-            segs = self.crf(segs)
             segs = self.softmax(segs)
 
             samples.append(segs)
