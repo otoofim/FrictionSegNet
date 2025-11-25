@@ -8,5 +8,6 @@ dependencies = [
     "cityscapesscripts>=2.2.4",
     "torch",
     "torchcrf>=1.1.0",
+    "torchmetrics>=1.8.2",
     "torchvision",
 ]

@@ -8,17 +8,13 @@ import torchvision.transforms as T
 import torch.nn.functional as F
 from torch.distributions import Normal, Independent, kl, MultivariateNormal
 from torchmetrics.functional.classification import multiclass_calibration_error
-from probabilistic_unet.model.prior import *
-from probabilistic_unet.model.posterior import *
-from probabilistic_unet.utils.objective_functions.objective_function import (
-    CrossEntopy,
-    MyMSE,
+from probabilistic_unet.model.prior import Prior
+from probabilistic_unet.model.posterior import Posterior
+from probabilistic_unet.utils.objective_functions.objective_function import CrossEntopy
+from probabilistic_unet.utils.confusion_matrix.confusion_matrix import (
+    multiclass_iou,
+    BatchImageConfusionMatrix,
 )
-import sys
-
-sys.path.insert(2, "../dataLoaders")
-# from probabilistic_unet.dataloader.mapillary_intended_objs import *
-from sklearn.preprocessing import normalize
 
 
 def init_weights(m):
@@ -36,7 +32,6 @@ class ProUNet(nn.Module):
     def __init__(
         self,
         num_classes,
-        gecoConfig,
         device,
         LatentVarSize=6,
         beta=5.0,
@@ -50,61 +45,60 @@ class ProUNet(nn.Module):
         self.training = training
         self.num_samples = num_samples
         self.num_classes = num_classes
-        self.gecoConfig = gecoConfig
         self.device = device
 
-        if self.gecoConfig["enable"]:
-            # self.geco = GECO(goal = gecoConfig["goal"], alpha = gecoConfig["alpha"], speedup = gecoConfig["speedup"], beta_init = gecoConfig["beta_init"], step_size = gecoConfig["step_size"], device = self.device)
-            self.geco = MyGECO(
-                goal_fri=gecoConfig["goal_fri"],
-                goal_seg=gecoConfig["goal_seg"],
-                alpha=gecoConfig["alpha"],
-                beta=gecoConfig["beta"],
-                step_size=gecoConfig["step_size"],
-                lambda_s=gecoConfig["lambda_s"],
-                lambda_f=gecoConfig["lambda_f"],
-                speedup=gecoConfig["speedup"],
-                beta_min=gecoConfig["beta_min"],
-                beta_max=gecoConfig["beta_max"],
-            )
-
         # architecture
-        self.prior = prior(
-            self.num_samples, self.num_classes, self.LatentVarSize
+        self.prior = Prior(
+            num_samples=self.num_samples,
+            num_classes=self.num_classes,
+            latent_var_size=self.LatentVarSize,
+            input_dim=3,
+            base_channels=128,
+            num_res_layers=2,
+            activation=nn.ReLU,
         ).apply(init_weights)
         if training:
-            self.posterior = posterior(
-                self.num_samples, self.num_classes, self.LatentVarSize
+            self.posterior = Posterior(
+                num_samples=self.num_samples,
+                num_classes=self.num_classes,
+                latent_var_size=self.LatentVarSize,
+                input_dim=None,  # Will be calculated as 3 + num_classes
+                base_channels=128,
+                num_res_layers=2,
+                activation=nn.ReLU,
             ).apply(init_weights)
 
         # loss functions
         self.criterion = CrossEntopy(label_smoothing=0.4)
-        self.regressionLoss = MyMSE()
 
-    def forward(self, inputImg, segmasks=None, friLabel=None):
-        posteriorDists = self.posterior(torch.cat((inputImg, segmasks, friLabel), 1))
-        seg, priorDists, fri = self.prior(inputImg, postDist=posteriorDists)
+    def forward(self, inputImg, segmasks=None):
+        posteriorDists = self.posterior(torch.cat((inputImg, segmasks), 1))
+        seg, priorDists = self.prior(inputImg, post_dist=posteriorDists)
 
-        return seg, priorDists, posteriorDists, fri
+        return seg, priorDists, posteriorDists
 
     def inference(self, inputFeatures):
-        with torch.no_grad():
-            return self.prior.inference(inputFeatures)
+        """Returns (samples, dists) where samples is stacked tensor of predictions"""
+        return self.prior.inference(inputFeatures)
 
     def latentVisualize(
         self, inputFeatures, sampleLatent1=None, sampleLatent2=None, sampleLatent3=None
     ):
+        """Returns (samples, dists) with custom latent samples if provided"""
         return self.prior.latentVisualize(
-            inputFeatures, sampleLatent1, sampleLatent2, sampleLatent3
+            inputFeatures,
+            sample_latent1=sampleLatent1,
+            sample_latent2=sampleLatent2,
+            sample_latent3=sampleLatent3,
         )
 
-    def evaluation(self, inputFeatures, segmasks, friLabel):
+    def evaluation(self, inputFeatures, segmasks):
         with torch.no_grad():
-            samples, priors, fris = self.prior.inference(inputFeatures)
+            samples, priors = self.prior.inference(inputFeatures)
             posteriorDists = self.posterior.inference(
-                torch.cat((inputFeatures, segmasks, friLabel), 1)
+                torch.cat((inputFeatures, segmasks), 1)
             )
-            return samples, priors, posteriorDists, fris
+            return samples, priors, posteriorDists
 
     def rec_loss(self, img, seg):
         error = self.criterion(output=img, target=seg)
@@ -118,22 +112,22 @@ class ProUNet(nn.Module):
             klLoss[level] = torch.mean(kl.kl_divergence(posterior[1], prior[1]), (1, 2))
         return klLoss
 
-    def elbo_loss(self, label, seg, priors, posteriors, friLabel=None, friPred=None):
+    def elbo_loss(self, label, seg, priors, posteriors):
         rec_loss = torch.mean(self.rec_loss(label, seg))
 
         kl_losses = self.kl_loss(priors, posteriors)
         kl_mean = torch.mean(torch.sum(torch.stack([i for i in kl_losses.values()]), 0))
 
-        regLoss = self.regressionLoss(target=friLabel, output=friPred)
+        loss = torch.mean(rec_loss + (self.beta * kl_mean))
 
-        loss = torch.mean(rec_loss + (self.beta * kl_mean) + regLoss)
-        #         loss = torch.mean(rec_loss + self.beta * kl_mean)
-
-        return loss, kl_mean, kl_losses, rec_loss, regLoss
+        return loss, kl_mean, kl_losses, rec_loss
 
     def stats(self, predictions, labels):
-        miou, ious = multiclass_iou(predictions, labels, classIds)
-        CM = BatchImageConfusionMatrix(predictions, labels, classIds)
+        # Generate class indices dynamically based on num_classes
+        class_indices = list(range(self.num_classes))
+
+        miou, ious = multiclass_iou(predictions, labels, class_indices)
+        CM = BatchImageConfusionMatrix(predictions, labels, class_indices)
 
         l1Loss = multiclass_calibration_error(
             preds=predictions,
@@ -159,27 +153,10 @@ class ProUNet(nn.Module):
 
         return miou, ious, l1Loss, l2Loss, l3Loss, CM
 
-    def lossGECO(self, label, segPred, priors, posteriors, friLabel=None, friPred=None):
-        rec_loss = torch.mean(self.rec_loss(label, segPred))
-
-        kl_losses = self.kl_loss(priors, posteriors)
-        kl_mean = torch.mean(torch.sum(torch.stack([i for i in kl_losses.values()]), 0))
-
-        regLoss = self.regressionLoss(target=friLabel, output=friPred)
-
-        loss = self.geco.loss(loss_fri=regLoss, loss_seg=rec_loss, kl_loss=kl_mean)
-
-        return loss, kl_mean, kl_losses, rec_loss, regLoss
-
-    def loss(self, label, segPred, priors, posteriors, friLabel=None, friPred=None):
-        if self.gecoConfig["enable"]:
-            loss, kl_mean, kl_losses, rec_loss, regLoss = self.lossGECO(
-                label, segPred, priors, posteriors, friLabel, friPred
-            )
-        else:
-            loss, kl_mean, kl_losses, rec_loss, regLoss = self.elbo_loss(
-                label, segPred, priors, posteriors, friLabel, friPred
-            )
+    def loss(self, label, segPred, priors, posteriors):
+        loss, kl_mean, kl_losses, rec_loss = self.elbo_loss(
+            label, segPred, priors, posteriors
+        )
 
         miou, ious, l1Loss, l2Loss, l3Loss, CM = self.stats(segPred, label)
 
@@ -193,6 +170,5 @@ class ProUNet(nn.Module):
             l1Loss,
             l2Loss,
             l3Loss,
-            regLoss,
             CM,
         )
