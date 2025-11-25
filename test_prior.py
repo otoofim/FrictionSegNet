@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from probabilistic_unet.model.prior import Prior
-from probabilistic_unet.model.posterior import Posterior
+# from probabilistic_unet.model.posterior import Posterior
 
 
 def test_prior():
@@ -117,6 +117,48 @@ def test_prior():
 
     except Exception as e:
         print(f"✗ Forward pass failed with error:")
+        print(f"  {type(e).__name__}: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+    # Test latentVisualize method
+    print("\n" + "=" * 60)
+    print("Testing latentVisualize() method...")
+    print("=" * 60)
+
+    try:
+        prior.eval()
+        samples_viz, dists_viz = prior.latentVisualize(input_features)
+        print(f"✓ latentVisualize successful!")
+        print(f"  - Output samples shape: {samples_viz.shape}")
+        print(f"  - Expected: ({num_samples}, {batch_size}, {num_classes}, H, W)")
+        print(f"  - Number of distributions: {len(dists_viz)}")
+
+        # Check shapes
+        assert samples_viz.shape[0] == num_samples, (
+            f"Expected {num_samples} samples, got {samples_viz.shape[0]}"
+        )
+        assert samples_viz.shape[1] == batch_size, (
+            f"Expected batch size {batch_size}, got {samples_viz.shape[1]}"
+        )
+        assert samples_viz.shape[2] == num_classes, (
+            f"Expected {num_classes} classes, got {samples_viz.shape[2]}"
+        )
+        print(f"✓ All shape assertions passed!")
+
+        # Test with custom latent samples
+        print(f"\nTesting with custom latent samples...")
+        custom_latent = dists_viz["dist1"].sample()
+        samples_custom, _ = prior.latentVisualize(
+            input_features, sample_latent1=custom_latent
+        )
+        print(f"✓ Custom latent visualization successful!")
+        print(f"  - Output shape: {samples_custom.shape}")
+
+    except Exception as e:
+        print(f"✗ latentVisualize failed with error:")
         print(f"  {type(e).__name__}: {e}")
         import traceback
 
