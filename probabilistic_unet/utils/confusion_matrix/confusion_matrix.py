@@ -50,7 +50,7 @@ def SingleImageConfusionMatrix(Predictions, Lables, classes):
             )
             CM_unnormalised[i][j] = total_pixels_predicted_as_i_in_class_j
 
-    return np.array([CM_unnormalised, total_pixels_in_class_j])
+    return (CM_unnormalised, total_pixels_in_class_j)
 
 
 def BatchImageConfusionMatrix(predictions, labels, classes):
@@ -65,10 +65,10 @@ def BatchImageConfusionMatrix(predictions, labels, classes):
         for pred, sample in zip(predictions, labels)
     ]
 
-    CM_unnormalised_totals = np.nan_to_num(np.array(list(zip(*confusionTest))[0])).sum()
-    pixels_in_class_j_totals = np.nan_to_num(
-        np.array(list(zip(*confusionTest))[1])
-    ).sum()
+    # Properly aggregate the confusion matrices and pixel counts
+    for cm_result in confusionTest:
+        CM_unnormalised_totals += cm_result[0]
+        pixels_in_class_j_totals += cm_result[1]
 
     CM = torch.tensor(
         [
