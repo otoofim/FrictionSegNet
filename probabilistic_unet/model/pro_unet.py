@@ -1,20 +1,15 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
-import numpy as np
-from torch.distributions import Normal, Independent, kl
-import torchvision
-import torchvision.transforms as T
-import torch.nn.functional as F
-from torch.distributions import Normal, Independent, kl, MultivariateNormal
+from torch.distributions import kl
 from torchmetrics.functional.classification import multiclass_calibration_error
-from probabilistic_unet.model.prior import Prior
+
 from probabilistic_unet.model.posterior import Posterior
-from probabilistic_unet.utils.objective_functions.objective_function import CrossEntopy
+from probabilistic_unet.model.prior import Prior
 from probabilistic_unet.utils.confusion_matrix.confusion_matrix import (
-    multiclass_iou,
     BatchImageConfusionMatrix,
+    multiclass_iou,
 )
+from probabilistic_unet.utils.objective_functions.objective_function import CrossEntopy
 
 
 def init_weights(m):
