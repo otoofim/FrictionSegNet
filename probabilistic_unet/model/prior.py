@@ -284,42 +284,100 @@ class Prior(nn.Module):
         dists = {}
         encoder_outs = {}
         samples = []
+        dist_counter = 1
 
-        # Downsampling
-        encoder_outs["out1"] = self.down_blocks[0](input_features)
-        encoder_outs["out2"] = F.dropout2d(
-            self.down_blocks[1](encoder_outs["out1"]), p=0.5, training=self.training
-        )
-        encoder_outs["out3"] = F.dropout2d(
-            self.down_blocks[2](encoder_outs["out2"]), p=0.3, training=self.training
-        )
-        encoder_outs["out4"], dists["dist1"] = self.down_blocks[3](encoder_outs["out3"])
+        # Downsampling - process all blocks except potentially the last one
+        for i, block in enumerate(self.down_blocks[:-1]):  # Exclude last block
+            if i == 0:
+                encoder_outs[f"out{i + 1}"] = block(input_features)
+            else:
+                encoder_outs[f"out{i + 1}"] = F.dropout2d(
+                    block(encoder_outs[f"out{i}"]),
+                    p=0.5 if i == 1 else 0.3,
+                    training=self.training,
+                )
+
+        # Handle last down_block
+        last_idx = len(self.down_blocks)
+        if self.down_blocks[-1].latent_dim is not None:
+            # Last block has latent_dim, so it returns (out, dist)
+            encoder_outs[f"out{last_idx}"], dists[f"dist{dist_counter}"] = (
+                self.down_blocks[-1](encoder_outs[f"out{last_idx - 1}"])
+            )
+            dist_counter += 1
+        else:
+            # Last block doesn't have latent_dim, apply dropout as usual
+            encoder_outs[f"out{last_idx}"] = F.dropout2d(
+                self.down_blocks[-1](encoder_outs[f"out{last_idx - 1}"]),
+                p=0.3,
+                training=self.training,
+            )
+
+        # Custom latent samples (for visualization purposes)
+        custom_latents = [sample_latent1, sample_latent2, sample_latent3]
 
         # Sampling and visualization
         for _ in range(self.num_samples):
-            out = self.up_blocks[0](encoder_outs["out4"])
-            latent1 = torch.nn.Upsample(
-                size=encoder_outs["out3"].shape[2:], mode="nearest"
-            )(dists["dist1"].rsample() if sample_latent1 is None else sample_latent1)
-            out = torch.cat((encoder_outs["out3"], out, latent1), 1)
+            # First up_block (no skip connection)
+            result = self.up_blocks[0](encoder_outs[f"out{len(self.down_blocks)}"])
+            if self.up_blocks[0].latent_dim is not None:
+                out, new_dist = result
+                if _ == 0:  # Only store dist on first sample
+                    dists[f"dist{dist_counter}"] = new_dist
+            else:
+                out = result
 
-            out = F.dropout2d(out, p=0.5, training=self.training)
-            out, dists["dist2"] = self.up_blocks[1](out)
-            latent2 = torch.nn.Upsample(
-                size=encoder_outs["out2"].shape[2:], mode="nearest"
-            )(dists["dist2"].rsample() if sample_latent2 is None else sample_latent2)
-            out = torch.cat((encoder_outs["out2"], out, latent2), 1)
+            # Remaining up_blocks with skip connections
+            for i in range(1, len(self.up_blocks)):
+                # Get encoder skip connection (reverse order)
+                skip_idx = len(self.down_blocks) - i
+                encoder_skip = encoder_outs[f"out{skip_idx}"]
 
-            out = F.dropout2d(out, p=0.5, training=self.training)
-            out, dists["dist3"] = self.up_blocks[2](out)
-            latent3 = torch.nn.Upsample(
-                size=encoder_outs["out1"].shape[2:], mode="nearest"
-            )(dists["dist3"].rsample() if sample_latent3 is None else sample_latent3)
-            out = torch.cat((encoder_outs["out1"], out, latent3), 1)
+                # Use custom latent if provided, otherwise sample from distribution
+                if custom_latents[i - 1] is not None:
+                    latent = custom_latents[i - 1]
+                else:
+                    latent = dists[f"dist{i}"].rsample()
 
-            segs = self.up_blocks[3](out)
-            segs = self.softmax(segs)
+                # Find the largest spatial dimensions among the three
+                shapes = [
+                    encoder_skip.shape[2:],
+                    latent.shape[2:],
+                    out.shape[2:],
+                ]
+                max_h = max(s[0] for s in shapes)
+                max_w = max(s[1] for s in shapes)
+                target_size = (max_h, max_w)
 
+                # Upsample all three to the largest size
+                encoder_skip = F.interpolate(
+                    encoder_skip,
+                    size=target_size,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                latent = F.interpolate(latent, size=target_size, mode="nearest")
+                out = F.interpolate(
+                    out, size=target_size, mode="bilinear", align_corners=False
+                )
+
+                # Concatenate encoder skip, previous output, and latent
+                concatenated = torch.cat((encoder_skip, out, latent), dim=1)
+
+                # Apply dropout and pass through block
+                concatenated = F.dropout2d(concatenated, p=0.5, training=self.training)
+                result = self.up_blocks[i](concatenated)
+
+                # Handle output based on whether block has latent_dim
+                if self.up_blocks[i].latent_dim is not None:
+                    out, new_dist = result
+                    if _ == 0:  # Only store dist on first sample
+                        dists[f"dist{i + 1}"] = new_dist
+                else:
+                    out = result
+
+            # Apply softmax to get probabilities
+            segs = self.softmax(out)
             samples.append(segs)
 
         return torch.stack(samples), dists
