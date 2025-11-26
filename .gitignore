@@ -50,3 +50,7 @@ MANIFEST
 Thumbs.db
 
 dataset/
+wandb/
+logs/
+checkpoints/
+experiments/
