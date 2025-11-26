@@ -37,6 +37,10 @@ class DatasetConfig:
     drop_last: bool = True
     device: str = "cuda"  # For pin_memory setting
 
+    # Dataset-specific settings (e.g., Cityscapes)
+    mode: str = "fine"  # 'fine' or 'coarse' for Cityscapes
+    target_type: str = "semantic"  # 'semantic' or 'instance' for Cityscapes
+
     def __post_init__(self):
         """Validate and process configuration after initialization."""
         # Ensure img_size is a tuple
@@ -179,6 +183,13 @@ class DatasetConfig:
 
         if os.getenv("DATASET_DEVICE"):
             config_dict["device"] = os.getenv("DATASET_DEVICE")
+
+        # Dataset-specific settings
+        if os.getenv("DATASET_MODE"):
+            config_dict["mode"] = os.getenv("DATASET_MODE")
+
+        if os.getenv("DATASET_TARGET_TYPE"):
+            config_dict["target_type"] = os.getenv("DATASET_TARGET_TYPE")
 
         return cls(**config_dict)
 

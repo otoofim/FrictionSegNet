@@ -87,20 +87,6 @@ except ImportError:
     ]
 
 
-class CityscapesDatasetConfig(DatasetConfig):
-    """Configuration class specifically for Cityscapes dataset loading."""
-
-    def __init__(self):
-        super().__init__()
-        # Override base defaults for Cityscapes
-        self.root_dir = "./datasets/Cityscapes"
-        self.img_size = (512, 1024)
-
-        # Dataset mode and target type (Cityscapes-specific)
-        self.mode = "fine"  # 'fine' or 'coarse'
-        self.target_type = "semantic"  # 'semantic' or 'instance'
-
-
 class CityscapesDataset(BaseSegmentationDataset):
     """
     Cityscapes Dataset with Efficient Augmentation System
@@ -215,7 +201,7 @@ class CityscapesDataset(BaseSegmentationDataset):
 
 
 def create_cityscapes_dataloaders(
-    config: CityscapesDatasetConfig,
+    config: DatasetConfig,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create train and validation dataloaders for Cityscapes dataset.

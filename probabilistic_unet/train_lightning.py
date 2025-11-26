@@ -27,6 +27,7 @@ from probabilistic_unet.dataloader.cityscapes_loader import (
     CITYSCAPES_CLASSES,
     NUM_CITYSCAPES_CLASSES,
     CityscapesDatasetConfig,
+    create_cityscapes_dataloaders,
 )
 from probabilistic_unet.model.pro_unet import ProUNet
 
@@ -485,7 +486,11 @@ def train_frictionsegnet(
 
     # Initialize data module
     logger.info("Initializing data module...")
-    data_module = FrictionSegNetDataModule(dataset_config, training_config)
+    data_module = FrictionSegNetDataModule(
+        dataset_factory=create_cityscapes_dataloaders,
+        dataset_config=dataset_config,
+        training_config=training_config,
+    )
 
     # Initialize model
     logger.info("Initializing model...")
