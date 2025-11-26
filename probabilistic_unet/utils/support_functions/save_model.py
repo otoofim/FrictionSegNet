@@ -2,6 +2,7 @@ import torch
 import os
 
 
+# Old function to save the model -- not used in new codebase but kept for reference
 def saveModel(
     modelPath, modelName, epoch, model, optimizer, tr_loss, val_loss, kwargs, newpath
 ):

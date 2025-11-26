@@ -1,0 +1,58 @@
+# Training Configuration Example
+# This file can be used with TrainingConfig.from_yaml()
+
+# Model architecture
+latent_dim: 6
+beta: 5.0
+num_samples: 16
+use_posterior: true
+
+# Training hyperparameters
+epochs: 100
+learning_rate: 0.0001
+weight_decay: 0.00001
+batch_size: 4
+accumulate_grad_batches: 1
+
+# Optimization
+optimizer: "adamw"  # adamw, adam, sgd
+lr_scheduler: "cosine"  # cosine, plateau, step, none
+warmup_epochs: 5
+min_lr: 0.000001
+
+# Regularization
+gradient_clip_val: 1.0
+label_smoothing: 0.1
+
+# Validation
+val_every_n_epoch: 1
+check_val_every_n_epoch: 1
+
+# Checkpointing
+save_top_k: 3
+monitor_metric: "val/mIoU"
+monitor_mode: "max"
+
+# Early stopping
+early_stop_patience: 20
+early_stop_min_delta: 0.001
+
+# WandB logging (can use environment variables)
+project_name: ${WANDB_PROJECT}  # Will be loaded from .env
+entity: ${WANDB_ENTITY}         # Will be loaded from .env
+run_name: "experiment_001"
+log_every_n_steps: 10
+
+# System
+num_workers: 4
+seed: 42
+precision: "16-mixed"  # 32, 16-mixed, bf16-mixed
+accelerator: "auto"    # auto, gpu, cpu
+devices: 1
+
+# Paths
+checkpoint_dir: "./checkpoints"
+log_dir: "./logs"
+
+# Resume training
+resume_from_checkpoint: null  # or path to checkpoint
