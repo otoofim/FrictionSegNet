@@ -1,7 +1,9 @@
 import sys
 from loguru import logger
-from probabilistic_unet.dataloader.cityscapes_loader import CityscapesDatasetConfig
-from probabilistic_unet.train import TrainingConfig
+from probabilistic_unet.utils.config_loader.config_dataclass import (
+    TrainingConfig,
+    DatasetConfig,
+)
 from probabilistic_unet.train_lightning import train_frictionsegnet
 
 
@@ -21,34 +23,22 @@ logger.add(
 def main():
     """Main entry point for training script."""
 
-    # Create dataset configuration
-    dataset_config = CityscapesDatasetConfig()
-    dataset_config.root_dir = "./datasets/Cityscapes"
-    dataset_config.batch_size = 4  # Will be overridden by training_config
-    dataset_config.img_size = (512, 1024)
-    dataset_config.use_augmentation = True
+    # Load configurations from .env file
+    logger.info("Loading configuration from .env file...")
 
-    # Create training configuration
-    training_config = TrainingConfig()
-    training_config.epochs = 100
-    training_config.learning_rate = 1e-4
-    training_config.batch_size = 4
-    training_config.latent_dim = 6
-    training_config.beta = 5.0
-    training_config.num_samples = 16
-    training_config.precision = "16-mixed"  # Use mixed precision for speed
-    training_config.gradient_clip_val = 1.0
-    training_config.accumulate_grad_batches = 1
+    # Create dataset configuration from .env
+    dataset_config = DatasetConfig.from_env()
 
-    # WandB configuration
-    training_config.project_name = "FrictionSegNet-Modern"
-    training_config.run_name = "cityscapes-lightning-v1"
+    # Create training configuration from .env
+    training_config = TrainingConfig.from_env()
 
     # Print configuration
     logger.info("Dataset Configuration:")
     logger.info(f"  Root: {dataset_config.root_dir}")
     logger.info(f"  Image size: {dataset_config.img_size}")
     logger.info(f"  Augmentation: {dataset_config.use_augmentation}")
+    logger.info(f"  Batch size: {dataset_config.batch_size}")
+    logger.info(f"  Num workers: {dataset_config.num_workers}")
 
     logger.info("\nTraining Configuration:")
     logger.info(f"  Epochs: {training_config.epochs}")
@@ -60,6 +50,9 @@ def main():
     logger.info(f"  Latent dim: {training_config.latent_dim}")
     logger.info(f"  Beta (KL weight): {training_config.beta}")
     logger.info(f"  Samples: {training_config.num_samples}")
+    logger.info(f"  WandB Project: {training_config.project_name}")
+    logger.info(f"  WandB Entity: {training_config.entity}")
+    logger.info(f"  Run Name: {training_config.run_name}")
 
     # Start training
     model, trainer = train_frictionsegnet(dataset_config, training_config)
