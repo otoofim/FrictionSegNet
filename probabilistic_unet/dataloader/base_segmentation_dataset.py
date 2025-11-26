@@ -342,7 +342,8 @@ class BaseSegmentationDataset(Dataset, ABC):
         predicted_mask: Optional[torch.Tensor] = None,
         save_path: Optional[str] = None,
         show_plot: bool = True,
-    ) -> None:
+        return_fig: bool = False,
+    ) -> Optional[plt.Figure]:
         """
         Visualize a sample with image, ground truth mask, and optional prediction.
 
@@ -351,6 +352,10 @@ class BaseSegmentationDataset(Dataset, ABC):
             predicted_mask: Optional predicted segmentation mask [1, H, W] or [H, W]
             save_path: Optional path to save the visualization
             show_plot: Whether to display the plot
+            return_fig: Whether to return the figure object (useful for WandB/TensorBoard logging)
+
+        Returns:
+            matplotlib.Figure if return_fig is True, otherwise None
         """
         num_plots = 3 if predicted_mask is None else 4
         fig, axes = plt.subplots(1, num_plots, figsize=(5 * num_plots, 5))
@@ -394,10 +399,15 @@ class BaseSegmentationDataset(Dataset, ABC):
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches="tight")
 
+        if return_fig:
+            return fig
+
         if show_plot:
             plt.show()
         else:
             plt.close()
+
+        return None
 
     def mask_to_color(self, mask: np.ndarray) -> np.ndarray:
         """
