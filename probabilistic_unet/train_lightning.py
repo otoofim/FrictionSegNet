@@ -1,4 +1,3 @@
-import sys
 from dataclasses import asdict
 from typing import Dict, Optional
 
@@ -6,7 +5,6 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 import wandb
-from loguru import logger
 from pytorch_lightning.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -38,18 +36,10 @@ from probabilistic_unet.utils.config_loader.config_dataclass import (
 from probabilistic_unet.dataloader.lightning_dataloader import (
     FrictionSegNetDataModule,
 )
+from probabilistic_unet.utils.logger import get_loguru_logger, get_logger
 
-# Configure loguru for beautiful logging
-logger.remove()  # Remove default handler
-logger.add(
-    sys.stderr,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    colorize=True,
-    level="INFO",
-)
-logger.add(
-    "logs/training_{time}.log", rotation="500 MB", retention="10 days", level="DEBUG"
-)
+# Get singleton logger
+logger = get_loguru_logger()
 
 
 class FrictionSegNetLightning(pl.LightningModule):
@@ -549,9 +539,20 @@ def train_frictionsegnet(
         )
         logger.info(f"WandB logger initialized: {training_config.project_name}")
         pl_logger = wandb_logger
+
+        # Configure singleton logger with WandB integration
+        logger_singleton = get_logger()
+        logger_singleton.configure_wandb(wandb_logger.experiment)
+        logger_singleton.configure_tensorboard("logs/tensorboard")
+        logger_singleton.log_hyperparameters(asdict(training_config))
     else:
         pl_logger = True  # Use default Lightning logger
         logger.warning("No WandB configuration provided, using default logger")
+
+        # Still configure TensorBoard
+        logger_singleton = get_logger()
+        logger_singleton.configure_tensorboard("logs/tensorboard")
+        logger_singleton.log_hyperparameters(asdict(training_config))
 
     # Initialize trainer
     logger.info("Initializing PyTorch Lightning Trainer...")

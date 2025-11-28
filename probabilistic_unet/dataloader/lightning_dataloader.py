@@ -1,25 +1,14 @@
-import sys
-
 from probabilistic_unet.utils.config_loader.config_dataclass import TrainingConfig
 
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from probabilistic_unet.utils.config_loader.config_dataclass import DatasetConfig
-from loguru import logger
+from probabilistic_unet.utils.logger import get_loguru_logger
 from typing import Optional, Callable, Tuple
 
 
-# Configure loguru for beautiful logging
-logger.remove()  # Remove default handler
-logger.add(
-    sys.stderr,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    colorize=True,
-    level="INFO",
-)
-logger.add(
-    "logs/training_{time}.log", rotation="500 MB", retention="10 days", level="DEBUG"
-)
+# Get singleton logger
+logger = get_loguru_logger()
 
 
 class FrictionSegNetDataModule(pl.LightningDataModule):

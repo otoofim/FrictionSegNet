@@ -22,6 +22,10 @@ from probabilistic_unet.dataloader.base_segmentation_dataset import (
     BaseSegmentationDataset,
 )
 from probabilistic_unet.utils.config_loader.config_dataclass import DatasetConfig
+from probabilistic_unet.utils.logger import get_loguru_logger
+
+# Get singleton logger
+logger = get_loguru_logger()
 
 
 try:
@@ -35,11 +39,13 @@ try:
     NUM_CITYSCAPES_CLASSES = len(CITYSCAPES_CLASSES)
     CITYSCAPES_COLORS = [label.color for label in labels if label.trainId != 255]
 
-    print("✅ Using official Cityscapes toolkit for labels and colors")
+    logger.success("✅ Using official Cityscapes toolkit for labels and colors")
 
 except ImportError:
-    print("⚠️  Official Cityscapes toolkit not found. Using fallback definitions.")
-    print("   Install with: pip install cityscapesscripts")
+    logger.warning(
+        "⚠️  Official Cityscapes toolkit not found. Using fallback definitions."
+    )
+    logger.warning("   Install with: pip install cityscapesscripts")
 
     # Fallback definitions (19 classes for semantic segmentation)
     CITYSCAPES_CLASSES = {
@@ -150,11 +156,11 @@ class CityscapesDataset(BaseSegmentationDataset):
         # Load image and target file paths
         self._load_file_paths()
 
-        print(f"Cityscapes {split} dataset loaded:")
-        print(f"  - Base samples: {len(self.images)}")
-        print(f"  - Augmentation strategies: {len(self.augmenters)}")
-        print(f"  - Total samples: {len(self)}")
-        print(f"  - Image size: {self.img_size}")
+        logger.info(f"Cityscapes {split} dataset loaded:")
+        logger.info(f"  - Base samples: {len(self.images)}")
+        logger.info(f"  - Augmentation strategies: {len(self.augmenters)}")
+        logger.info(f"  - Total samples: {len(self)}")
+        logger.info(f"  - Image size: {self.img_size}")
 
     def _load_file_paths(self):
         """Load image and target file paths from the dataset directory."""
@@ -185,7 +191,7 @@ class CityscapesDataset(BaseSegmentationDataset):
                         self.images.append(img_path)
                         self.targets.append(target_path)
                     else:
-                        print(f"Warning: Target file not found: {target_path}")
+                        logger.warning(f"Target file not found: {target_path}")
 
     def get_num_classes(self) -> int:
         """Return number of classes in Cityscapes dataset."""
