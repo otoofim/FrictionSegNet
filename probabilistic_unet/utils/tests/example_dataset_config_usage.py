@@ -111,12 +111,12 @@ def example_cityscapes_config():
 
 
 def example_integration_with_datamodule():
-    """Example showing integration with FrictionSegNetDataModule."""
+    """Example showing integration with ProbabilisticUNetDataModule."""
     print("=" * 60)
     print("Example 5: Integration with DataModule")
     print("=" * 60)
 
-    from probabilistic_unet.dataloader import FrictionSegNetDataModule
+    from probabilistic_unet.dataloader import ProbabilisticUNetDataModule
     from probabilistic_unet.utils.config_loader.config_dataclass import TrainingConfig
 
     # Load dataset config from YAML (with env variable substitution)
@@ -140,7 +140,7 @@ def example_integration_with_datamodule():
     print()
 
     # Note: Actual DataModule creation would happen during training
-    # datamodule = FrictionSegNetDataModule.create_cityscapes(
+    # datamodule = ProbabilisticUNetDataModule.create_cityscapes(
     #     dataset_config, training_config
     # )
 

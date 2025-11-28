@@ -299,7 +299,7 @@ class TrainingConfig:
     early_stop_min_delta: float = 0.001
 
     # WandB logging
-    project_name: str = "FrictionSegNet-Modern"
+    project_name: str = "Probabilistic-UNet"
     entity: Optional[str] = None
     run_name: Optional[str] = None
     log_every_n_steps: int = 10

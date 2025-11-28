@@ -2,7 +2,7 @@ from probabilistic_unet.utils.config_loader.config_dataclass import (
     TrainingConfig,
     DatasetConfig,
 )
-from probabilistic_unet.train_lightning import train_frictionsegnet
+from probabilistic_unet.train_lightning import train_probabilistic_unet
 from probabilistic_unet.utils.logger import get_loguru_logger
 
 # Get singleton logger
@@ -44,7 +44,7 @@ def main():
     logger.info(f"  Run Name: {training_config.run_name}")
 
     # Start training
-    model, trainer = train_frictionsegnet(dataset_config, training_config)
+    model, trainer = train_probabilistic_unet(dataset_config, training_config)
 
     logger.success("All done! 🎉")
 

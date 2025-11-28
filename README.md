@@ -1,6 +1,6 @@
-# FrictionSegNet
+# Probabilistic U-Net
 
-A specialized implementation of probabilistic U-Net for friction segmentation with VAE latent space sampling.
+A specialized implementation of probabilistic U-Net for semantic segmentation with VAE latent space sampling.
 
 ## Package Management
 
@@ -38,7 +38,7 @@ source .venv/bin/activate  # Linux/Mac
 ✅ **VAE Latent Space Sampling**: The specialized VAE implementation with `rsample()` and `sample()` methods is fully preserved  
 ✅ **Multi-level Latent Variables**: Three-level latent distribution hierarchy (dist1, dist2, dist3)  
 ✅ **Probabilistic U-Net Architecture**: Complete prior and posterior networks with custom sampling strategies  
-✅ **Friction Prediction**: Regression layer for friction coefficient prediction alongside segmentation  
+✅ **Uncertainty Quantification**: Probabilistic predictions for semantic segmentation with uncertainty estimation  
 
 ### Migration from Poetry
 
