@@ -26,12 +26,15 @@ from torchmetrics.classification import (
 from probabilistic_unet.dataloader.cityscapes_loader import (
     CITYSCAPES_CLASSES,
     NUM_CITYSCAPES_CLASSES,
-    CityscapesDatasetConfig,
+    create_cityscapes_dataloaders,
 )
 from probabilistic_unet.model.pro_unet import ProUNet
 
 # Local imports
-from probabilistic_unet.utils.config_loader.config_dataclass import TrainingConfig
+from probabilistic_unet.utils.config_loader.config_dataclass import (
+    TrainingConfig,
+    DatasetConfig,
+)
 from probabilistic_unet.dataloader.lightning_dataloader import (
     FrictionSegNetDataModule,
 )
@@ -464,7 +467,7 @@ class FrictionSegNetLightning(pl.LightningModule):
 
 
 def train_frictionsegnet(
-    dataset_config: CityscapesDatasetConfig,
+    dataset_config: DatasetConfig,
     training_config: TrainingConfig,
 ):
     """
@@ -485,7 +488,11 @@ def train_frictionsegnet(
 
     # Initialize data module
     logger.info("Initializing data module...")
-    data_module = FrictionSegNetDataModule(dataset_config, training_config)
+    data_module = FrictionSegNetDataModule(
+        dataset_factory=create_cityscapes_dataloaders,
+        dataset_config=dataset_config,
+        training_config=training_config,
+    )
 
     # Initialize model
     logger.info("Initializing model...")

@@ -1,15 +1,12 @@
 import sys
 
-from probabilistic_unet.dataloader.cityscapes_loader import CityscapesDatasetConfig
 from probabilistic_unet.utils.config_loader.config_dataclass import TrainingConfig
 
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
-from probabilistic_unet.dataloader.cityscapes_loader import (
-    create_cityscapes_dataloaders,
-)
+from probabilistic_unet.utils.config_loader.config_dataclass import DatasetConfig
 from loguru import logger
-from typing import Optional
+from typing import Optional, Callable, Tuple
 
 
 # Configure loguru for beautiful logging
@@ -27,18 +24,50 @@ logger.add(
 
 class FrictionSegNetDataModule(pl.LightningDataModule):
     """
-    PyTorch Lightning DataModule for Cityscapes dataset.
+    PyTorch Lightning DataModule for segmentation datasets.
 
-    Encapsulates all data loading logic including train/val splits,
-    augmentations, and DataLoader configuration.
+    This DataModule serves as a bridge between the Lightning training loop and
+    specific dataset implementations (Cityscapes, custom datasets, etc.).
+
+    It supports:
+    - Multiple dataset types through a factory pattern
+    - Automatic configuration of batch size and num_workers
+    - Flexible dataset creation via custom factory functions
+
+    Usage:
+        # For Cityscapes
+        from probabilistic_unet.dataloader.cityscapes_loader import create_cityscapes_dataloaders
+
+        datamodule = FrictionSegNetDataModule(
+            dataset_factory=create_cityscapes_dataloaders,
+            dataset_config=cityscapes_config,
+            training_config=training_config
+        )
+
+        # For custom datasets
+        datamodule = FrictionSegNetDataModule(
+            dataset_factory=my_custom_dataloader_factory,
+            dataset_config=my_config,
+            training_config=training_config
+        )
     """
 
     def __init__(
         self,
-        dataset_config: CityscapesDatasetConfig,
+        dataset_factory: Callable[[DatasetConfig], Tuple[DataLoader, DataLoader]],
+        dataset_config: DatasetConfig,
         training_config: TrainingConfig,
     ):
+        """
+        Initialize the DataModule with a dataset factory function.
+
+        Args:
+            dataset_factory: Function that takes a config and returns (train_loader, val_loader)
+            dataset_config: Configuration for the dataset
+            training_config: Training configuration including batch size and num_workers
+        """
         super().__init__()
+        self.dataset_factory = dataset_factory
         self.dataset_config = dataset_config
         self.training_config = training_config
 
@@ -56,10 +85,8 @@ class FrictionSegNetDataModule(pl.LightningDataModule):
         """Setup datasets for training and validation."""
         logger.info("Setting up datasets...")
 
-        # Create dataloaders using the efficient Cityscapes system
-        self.train_loader, self.val_loader = create_cityscapes_dataloaders(
-            self.dataset_config
-        )
+        # Create dataloaders using the factory function
+        self.train_loader, self.val_loader = self.dataset_factory(self.dataset_config)
 
         logger.success(f"✅ Training samples: {len(self.train_loader.dataset)}")
         logger.success(f"✅ Validation samples: {len(self.val_loader.dataset)}")
