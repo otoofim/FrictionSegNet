@@ -8,9 +8,9 @@ rather than the CLI. Useful for notebooks or custom scripts.
 """
 
 from probabilistic_unet.train_lightning import (
-    train_frictionsegnet,
+    train_probabilistic_unet,
     TrainingConfig,
-    FrictionSegNetLightning,
+    ProbabilisticUNetLightning,
 )
 from probabilistic_unet.dataloader.cityscapes_loader import (
     CityscapesDatasetConfig,
@@ -37,7 +37,7 @@ def example_basic_training():
     training_config.run_name = "example-basic"
 
     # Train
-    model, trainer = train_frictionsegnet(dataset_config, training_config)
+    model, trainer = train_probabilistic_unet(dataset_config, training_config)
     logger.success("Training completed!")
 
     return model, trainer
@@ -76,11 +76,11 @@ def example_custom_training():
     training_config.accumulate_grad_batches = 2
 
     # Logging
-    training_config.project_name = "FrictionSegNet-Experiments"
+    training_config.project_name = "Probabilistic-UNet-Experiments"
     training_config.run_name = "custom-high-beta"
 
     # Train
-    model, trainer = train_frictionsegnet(dataset_config, training_config)
+    model, trainer = train_probabilistic_unet(dataset_config, training_config)
     logger.success(f"Best validation mIoU: {model.best_val_miou:.4f}")
 
     return model, trainer
@@ -102,7 +102,7 @@ def example_multi_gpu_training():
     training_config.num_workers = 8
     training_config.run_name = "multi-gpu-experiment"
 
-    model, trainer = train_frictionsegnet(dataset_config, training_config)
+    model, trainer = train_probabilistic_unet(dataset_config, training_config)
 
     return model, trainer
 
@@ -119,7 +119,7 @@ def example_resume_training():
     training_config.resume_from_checkpoint = "checkpoints/last.ckpt"
     training_config.run_name = "resumed-training"
 
-    model, trainer = train_frictionsegnet(dataset_config, training_config)
+    model, trainer = train_probabilistic_unet(dataset_config, training_config)
 
     return model, trainer
 
@@ -142,7 +142,7 @@ def example_hyperparameter_sweep():
         training_config.beta = beta
         training_config.run_name = f"beta-sweep-{beta}"
 
-        model, trainer = train_frictionsegnet(dataset_config, training_config)
+        model, trainer = train_probabilistic_unet(dataset_config, training_config)
 
         # Store results
         results[beta] = {
@@ -169,7 +169,7 @@ def example_inference():
     from pathlib import Path
 
     # Load checkpoint
-    checkpoint_path = "checkpoints/frictionsegnet-epoch=50-val_mIoU=0.7500.ckpt"
+    checkpoint_path = "checkpoints/probabilistic-unet-epoch=50-val_mIoU=0.7500.ckpt"
 
     if not Path(checkpoint_path).exists():
         logger.warning(f"Checkpoint not found: {checkpoint_path}")
@@ -177,7 +177,7 @@ def example_inference():
         return
 
     # Load model from checkpoint
-    model = FrictionSegNetLightning.load_from_checkpoint(
+    model = ProbabilisticUNetLightning.load_from_checkpoint(
         checkpoint_path,
         num_classes=NUM_CITYSCAPES_CLASSES,
         training_config=TrainingConfig(),  # Use default config
@@ -220,7 +220,7 @@ def example_custom_callbacks():
     training_config.epochs = 50
     training_config.run_name = "custom-callbacks"
 
-    # Would need to modify train_frictionsegnet to accept custom callbacks
+    # Would need to modify train_probabilistic_unet to accept custom callbacks
     # For now, this is just an example of the concept
     logger.info("This would use custom callbacks if implemented!")
 

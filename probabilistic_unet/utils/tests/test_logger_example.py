@@ -1,5 +1,5 @@
 """
-Example demonstrating the usage of FrictionSegNet's singleton logger.
+Example demonstrating the usage of Probabilistic U-Net's singleton logger.
 
 This script shows how to:
 1. Use the basic logger for console and file logging
@@ -80,12 +80,12 @@ def example_with_wandb():
 
     logger = get_loguru_logger()
 
-    # Initialize WandB (set mode="disabled" to skip actual logging)
-    logger.info("Initializing WandB...")
+    # Initialize WandB (set mode=\"disabled\" to skip actual logging)
+    logger.info(\"Initializing WandB...\")
     run = wandb.init(
-        project="frictionsegnet-logger-example",
-        name="test-run",
-        mode="disabled",  # Set to "online" to actually log to WandB
+        project=\"probabilistic-unet-logger-example\",
+        name=\"test-run\",
+        mode=\"disabled\",  # Set to \"online\" to actually log to WandB
         config={"learning_rate": 0.001, "batch_size": 16, "epochs": 100},
     )
 
@@ -216,7 +216,7 @@ def example_context_logging():
 def main():
     """Run all examples."""
     print("\n" + "=" * 80)
-    print("FrictionSegNet Logger Examples")
+    print("Probabilistic U-Net Logger Examples")
     print("=" * 80)
 
     try:

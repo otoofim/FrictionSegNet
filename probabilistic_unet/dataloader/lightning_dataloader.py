@@ -11,7 +11,7 @@ from typing import Optional, Callable, Tuple
 logger = get_loguru_logger()
 
 
-class FrictionSegNetDataModule(pl.LightningDataModule):
+class ProbabilisticUNetDataModule(pl.LightningDataModule):
     """
     PyTorch Lightning DataModule for segmentation datasets.
 
@@ -27,14 +27,14 @@ class FrictionSegNetDataModule(pl.LightningDataModule):
         # For Cityscapes
         from probabilistic_unet.dataloader.cityscapes_loader import create_cityscapes_dataloaders
 
-        datamodule = FrictionSegNetDataModule(
+        datamodule = ProbabilisticUNetDataModule(
             dataset_factory=create_cityscapes_dataloaders,
             dataset_config=cityscapes_config,
             training_config=training_config
         )
 
         # For custom datasets
-        datamodule = FrictionSegNetDataModule(
+        datamodule = ProbabilisticUNetDataModule(
             dataset_factory=my_custom_dataloader_factory,
             dataset_config=my_config,
             training_config=training_config

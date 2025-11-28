@@ -34,7 +34,7 @@ from probabilistic_unet.utils.config_loader.config_dataclass import (
     DatasetConfig,
 )
 from probabilistic_unet.dataloader.lightning_dataloader import (
-    FrictionSegNetDataModule,
+    ProbabilisticUNetDataModule,
 )
 from probabilistic_unet.utils.logger import get_loguru_logger, get_logger
 
@@ -42,9 +42,9 @@ from probabilistic_unet.utils.logger import get_loguru_logger, get_logger
 logger = get_loguru_logger()
 
 
-class FrictionSegNetLightning(pl.LightningModule):
+class ProbabilisticUNetLightning(pl.LightningModule):
     """
-    PyTorch Lightning Module for FrictionSegNet.
+    PyTorch Lightning Module for Probabilistic U-Net.
 
     This encapsulates the training logic, metrics, and optimization
     in a clean, reusable way following Lightning best practices.
@@ -77,7 +77,7 @@ class FrictionSegNetLightning(pl.LightningModule):
         # Track best metrics
         self.best_val_miou = 0.0
 
-        logger.info(f"Initialized FrictionSegNet with {num_classes} classes")
+        logger.info(f"Initialized Probabilistic U-Net with {num_classes} classes")
         logger.info(f"Latent dimension: {training_config.latent_dim}")
         logger.info(f"Beta (KL weight): {training_config.beta}")
         logger.info(f"Number of samples: {training_config.num_samples}")
@@ -456,7 +456,7 @@ class FrictionSegNetLightning(pl.LightningModule):
             return optimizer
 
 
-def train_frictionsegnet(
+def train_probabilistic_unet(
     dataset_config: DatasetConfig,
     training_config: TrainingConfig,
 ):
@@ -469,7 +469,7 @@ def train_frictionsegnet(
     """
 
     logger.info("=" * 80)
-    logger.info("FrictionSegNet Training with PyTorch Lightning")
+    logger.info("Probabilistic U-Net Training with PyTorch Lightning")
     logger.info("=" * 80)
 
     # Set random seed for reproducibility
@@ -478,7 +478,7 @@ def train_frictionsegnet(
 
     # Initialize data module
     logger.info("Initializing data module...")
-    data_module = FrictionSegNetDataModule(
+    data_module = ProbabilisticUNetDataModule(
         dataset_factory=create_cityscapes_dataloaders,
         dataset_config=dataset_config,
         training_config=training_config,
@@ -486,7 +486,7 @@ def train_frictionsegnet(
 
     # Initialize model
     logger.info("Initializing model...")
-    model = FrictionSegNetLightning(
+    model = ProbabilisticUNetLightning(
         num_classes=NUM_CITYSCAPES_CLASSES,
         training_config=training_config,
     )
@@ -497,7 +497,7 @@ def train_frictionsegnet(
     # Model checkpoint callback
     checkpoint_callback = ModelCheckpoint(
         dirpath=training_config.checkpoint_dir,
-        filename="frictionsegnet-{epoch:02d}-{val/mIoU:.4f}",
+        filename="probabilistic-unet-{epoch:02d}-{val/mIoU:.4f}",
         monitor=training_config.monitor_metric,
         mode=training_config.monitor_mode,
         save_top_k=training_config.save_top_k,

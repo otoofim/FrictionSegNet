@@ -1,5 +1,5 @@
 """
-Utilities module for FrictionSegNet.
+Utilities module for Probabilistic U-Net.
 
 This module provides utility functions and classes including:
 - Singleton logger with WandB/TensorBoard integration
