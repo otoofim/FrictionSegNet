@@ -49,7 +49,7 @@ MANIFEST
 .DS_Store
 Thumbs.db
 
-dataset/
+datasets/
 wandb/
 logs/
 checkpoints/
