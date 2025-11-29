@@ -14,6 +14,10 @@ size by the number of augmentation strategies.
 """
 
 import os
+import zipfile
+import shutil
+import urllib.request
+from pathlib import Path
 from torch.utils.data import DataLoader
 import torch
 from typing import Dict, Tuple, List, Optional
@@ -26,6 +30,149 @@ from probabilistic_unet.utils.logger import get_loguru_logger
 
 # Get singleton logger
 logger = get_loguru_logger()
+
+# Cityscapes dataset download URLs (official dataset requires registration)
+# These are placeholder URLs - users need to download manually from official site
+CITYSCAPES_DOWNLOAD_INFO = {
+    "official_url": "https://www.cityscapes-dataset.com/downloads/",
+    "required_files": [
+        "leftImg8bit_trainvaltest.zip",  # Images (11GB)
+        "gtFine_trainvaltest.zip",  # Fine annotations (241MB)
+    ],
+    "note": "Cityscapes dataset requires registration and manual download from the official website.",
+}
+
+
+def _download_with_progress(url: str, destination: str) -> None:
+    """
+    Download a file with progress reporting.
+
+    Args:
+        url: URL to download from
+        destination: Local path to save the file
+    """
+
+    def _progress_hook(count, block_size, total_size):
+        percent = int(count * block_size * 100 / total_size)
+        logger.info(f"Downloading: {percent}% complete")
+
+    logger.info(f"Downloading from {url}...")
+    urllib.request.urlretrieve(url, destination, _progress_hook)
+    logger.success(f"Download complete: {destination}")
+
+
+def _extract_zip(zip_path: str, extract_to: str) -> None:
+    """
+    Extract a zip file to a destination directory.
+
+    Args:
+        zip_path: Path to the zip file
+        extract_to: Directory to extract files to
+    """
+    logger.info(f"Extracting {zip_path}...")
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(extract_to)
+    logger.success(f"Extraction complete: {extract_to}")
+
+
+def _verify_cityscapes_structure(root_dir: str, split: str, mode: str) -> bool:
+    """
+    Verify that the Cityscapes dataset has the expected directory structure.
+
+    Args:
+        root_dir: Root directory of the dataset
+        split: Dataset split to verify ('train', 'val', 'test')
+        mode: Annotation mode ('fine', 'coarse')
+
+    Returns:
+        True if structure is valid, False otherwise
+    """
+    images_dir = os.path.join(root_dir, "leftImg8bit", split)
+    targets_dir = os.path.join(root_dir, f"gt{mode.capitalize()}", split)
+
+    if not os.path.exists(images_dir):
+        logger.warning(f"Missing images directory: {images_dir}")
+        return False
+
+    if not os.path.exists(targets_dir):
+        logger.warning(f"Missing targets directory: {targets_dir}")
+        return False
+
+    # Check if directories have content
+    if not os.listdir(images_dir):
+        logger.warning(f"Images directory is empty: {images_dir}")
+        return False
+
+    if not os.listdir(targets_dir):
+        logger.warning(f"Targets directory is empty: {targets_dir}")
+        return False
+
+    return True
+
+
+def download_cityscapes_instructions(root_dir: str) -> None:
+    """
+    Print instructions for downloading the Cityscapes dataset.
+
+    The Cityscapes dataset requires registration and cannot be automatically
+    downloaded. This function provides clear instructions for users.
+
+    Args:
+        root_dir: Directory where the dataset should be placed
+    """
+    logger.error("❌ Cityscapes dataset not found!")
+    logger.info("\n" + "=" * 70)
+    logger.info("📥 CITYSCAPES DATASET DOWNLOAD INSTRUCTIONS")
+    logger.info("=" * 70)
+    logger.info(f"\n{CITYSCAPES_DOWNLOAD_INFO['note']}")
+    logger.info(f"\n1. Visit: {CITYSCAPES_DOWNLOAD_INFO['official_url']}")
+    logger.info("2. Create an account and log in")
+    logger.info("3. Download the following files:")
+    for file in CITYSCAPES_DOWNLOAD_INFO["required_files"]:
+        logger.info(f"   - {file}")
+    logger.info(f"\n4. Extract the files to: {root_dir}")
+    logger.info("\n5. Expected directory structure:")
+    logger.info(f"   {root_dir}/")
+    logger.info("   ├── leftImg8bit/")
+    logger.info("   │   ├── train/")
+    logger.info("   │   ├── val/")
+    logger.info("   │   └── test/")
+    logger.info("   ├── gtFine/")
+    logger.info("   │   ├── train/")
+    logger.info("   │   ├── val/")
+    logger.info("   │   └── test/")
+    logger.info("   └── gtCoarse/ (optional)")
+    logger.info("\n" + "=" * 70 + "\n")
+
+
+def setup_cityscapes_dataset(
+    root_dir: str, split: str = "train", mode: str = "fine"
+) -> bool:
+    """
+    Set up Cityscapes dataset by verifying or providing download instructions.
+
+    Since Cityscapes requires manual download, this function checks if the
+    dataset exists and provides instructions if it doesn't.
+
+    Args:
+        root_dir: Root directory for the dataset
+        split: Dataset split to verify ('train', 'val', 'test')
+        mode: Annotation mode ('fine', 'coarse')
+
+    Returns:
+        True if dataset is ready, False if manual download is needed
+    """
+    # Create root directory if it doesn't exist
+    os.makedirs(root_dir, exist_ok=True)
+
+    # Check if dataset structure exists
+    if _verify_cityscapes_structure(root_dir, split, mode):
+        logger.success(f"✅ Cityscapes dataset found at: {root_dir}")
+        return True
+
+    # Dataset not found - provide instructions
+    download_cityscapes_instructions(root_dir)
+    return False
 
 
 try:
@@ -117,6 +264,7 @@ class CityscapesDataset(BaseSegmentationDataset):
         target_type: str = "semantic",
         use_augmentation: bool = True,
         augmentation_seed: int = 200,
+        auto_download: bool = True,
     ):
         """
         Initialize Cityscapes dataset.
@@ -129,10 +277,19 @@ class CityscapesDataset(BaseSegmentationDataset):
             target_type: Target type ('semantic', 'instance')
             use_augmentation: Whether to use augmentation
             augmentation_seed: Random seed for reproducible augmentation
+            auto_download: If True, check for dataset and provide download instructions if missing
         """
         # Store Cityscapes-specific attributes before parent init
         self.mode = mode
         self.target_type = target_type
+
+        # Verify or setup dataset if auto_download is enabled
+        if auto_download:
+            if not setup_cityscapes_dataset(root_dir, split, mode):
+                raise FileNotFoundError(
+                    f"Cityscapes dataset not found at {root_dir}. "
+                    "Please follow the instructions above to download the dataset manually."
+                )
 
         # Initialize parent class
         super().__init__(
@@ -147,7 +304,7 @@ class CityscapesDataset(BaseSegmentationDataset):
         self.images_dir = os.path.join(root_dir, "leftImg8bit", split)
         self.targets_dir = os.path.join(root_dir, f"gt{mode.capitalize()}", split)
 
-        # Validate directories exist
+        # Final validation (should not fail if auto_download worked)
         if not os.path.exists(self.images_dir):
             raise FileNotFoundError(f"Images directory not found: {self.images_dir}")
         if not os.path.exists(self.targets_dir):
