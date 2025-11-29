@@ -299,6 +299,7 @@ class TrainingConfig:
     early_stop_min_delta: float = 0.001
 
     # WandB logging
+    wandb_api_key: Optional[str] = None
     project_name: str = "Probabilistic-UNet"
     entity: Optional[str] = None
     run_name: Optional[str] = None
@@ -405,6 +406,7 @@ class TrainingConfig:
             TRAINING_MONITOR_MODE
             TRAINING_EARLY_STOP_PATIENCE
             TRAINING_EARLY_STOP_MIN_DELTA
+            WANDB_API_KEY
             WANDB_PROJECT
             WANDB_ENTITY
             WANDB_RUN_NAME
@@ -504,6 +506,9 @@ class TrainingConfig:
             )
 
         # WandB logging
+        if os.getenv("WANDB_API_KEY"):
+            wandb_api_key = os.getenv("WANDB_API_KEY")
+            config_dict["wandb_api_key"] = wandb_api_key if wandb_api_key else None
         if os.getenv("WANDB_PROJECT"):
             config_dict["project_name"] = os.getenv("WANDB_PROJECT")
         if os.getenv("WANDB_ENTITY"):

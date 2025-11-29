@@ -530,6 +530,13 @@ def train_probabilistic_unet(
 
     # Setup logger
     if training_config.entity or training_config.project_name:
+        # Set WandB API key if provided
+        if training_config.wandb_api_key:
+            import os
+
+            os.environ["WANDB_API_KEY"] = training_config.wandb_api_key
+            logger.info("WandB API key set from configuration")
+
         wandb_logger = WandbLogger(
             project=training_config.project_name,
             entity=training_config.entity,
