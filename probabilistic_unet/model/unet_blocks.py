@@ -48,7 +48,7 @@ class UpConvBlock(nn.Module):
 
         self.firstLayer = nn.Sequential(
             nn.ConvTranspose2d(input_dim, output_dim, kernel_size=kernel_size, stride=stride, padding=padding),
-            activation(inplace=True)
+            activation()
         )
 
         self.layers = nn.Sequential(
@@ -58,7 +58,7 @@ class UpConvBlock(nn.Module):
         if self.latent_dim:
             self.distLayer = nn.Sequential(
                 nn.Conv2d(output_dim, 2 * self.latent_dim, kernel_size=1, stride=1),
-                activation(inplace=True)
+                activation()
             )
 
     def forward(self, inputFeatures):

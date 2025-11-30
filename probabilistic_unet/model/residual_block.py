@@ -28,7 +28,7 @@ class ResidualBlock(nn.Module):
         if self.downsample is not None:
             identity = self.downsample(x)
 
-        out += identity
+        out = out + identity
         out = self.activation(out)
 
         return out

@@ -579,7 +579,7 @@ def train_probabilistic_unet(
         gradient_clip_val=training_config.gradient_clip_val,
         accumulate_grad_batches=training_config.accumulate_grad_batches,
         check_val_every_n_epoch=training_config.check_val_every_n_epoch,
-        deterministic=True,  # For reproducibility
+        deterministic="warn_only",  # For reproducibility with warnings for non-deterministic operations
         enable_model_summary=True,
     )
 
