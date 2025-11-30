@@ -5,7 +5,8 @@ import numpy as np
 def multiclass_iou(output, target, classes):
     smooth = 1e-6
     output = torch.argmax(output, dim=1)
-    target = torch.argmax(target, dim=1)
+    # target is now [B, 1, H, W] with class indices, squeeze to [B, H, W]
+    target = torch.squeeze(target, dim=1).long()
     iou_scores = {}
 
     # Handle both dict (class names) and list (class indices) inputs
@@ -33,7 +34,8 @@ def SingleImageConfusionMatrix(Predictions, Lables, classes):
     CM_unnormalised = torch.zeros([num_classes, num_classes])
     total_pixels_in_class_j = torch.zeros([num_classes, 1])
     Predictions = torch.argmax(Predictions, dim=0)
-    Lables = torch.argmax(Lables, dim=0)
+    # Lables is now [1, H, W] with class indices, squeeze to [H, W]
+    Lables = torch.squeeze(Lables, dim=0).long()
 
     # produce unnormalised CM:
     for j, _ in enumerate(classes):

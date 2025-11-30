@@ -78,7 +78,7 @@ class ProUNet(nn.Module):
                 num_samples=self.num_samples,
                 num_classes=self.num_classes,
                 latent_var_size=self.latent_var_size,
-                input_dim=None,  # Will be calculated as 3 + num_classes
+                input_dim=4,  # 3 RGB channels + 1 class index channel
                 base_channels=128,
                 num_res_layers=2,
                 activation=nn.ReLU,
@@ -96,7 +96,7 @@ class ProUNet(nn.Module):
 
         Args:
             input_img: Input image tensor [B, 3, H, W]
-            segmasks: Ground truth segmentation masks [B, num_classes, H, W]
+            segmasks: Ground truth segmentation class indices [B, 1, H, W]
 
         Returns:
             Tuple of (segmentation_output, prior_distributions, posterior_distributions)
@@ -152,7 +152,7 @@ class ProUNet(nn.Module):
 
         Args:
             input_features: Input image tensor [B, 3, H, W]
-            segmasks: Ground truth segmentation masks [B, num_classes, H, W]
+            segmasks: Ground truth segmentation class indices [B, 1, H, W]
 
         Returns:
             Tuple of (samples, prior_distributions, posterior_distributions)
@@ -174,12 +174,14 @@ class ProUNet(nn.Module):
 
         Args:
             predictions: Model predictions [B, num_classes, H, W]
-            targets: Ground truth segmentation [B, num_classes, H, W]
+            targets: Ground truth segmentation class indices [B, 1, H, W]
 
         Returns:
             Reconstruction loss value
         """
-        return self.criterion(output=predictions, target=targets)
+        # Squeeze targets from [B, 1, H, W] to [B, H, W] for CrossEntropyLoss
+        targets_squeezed = torch.squeeze(targets, dim=1).long()
+        return self.criterion(output=predictions, target=targets_squeezed)
 
     def kl_loss(self, priors: Dict, posteriors: Dict) -> Dict[int, torch.Tensor]:
         """Compute KL divergence between posterior and prior distributions.
@@ -212,7 +214,7 @@ class ProUNet(nn.Module):
         ELBO = Reconstruction Loss + β * KL Divergence
 
         Args:
-            targets: Ground truth segmentation [B, num_classes, H, W]
+            targets: Ground truth segmentation class indices [B, 1, H, W]
             predictions: Model predictions [B, num_classes, H, W]
             priors: Dictionary of prior distributions
             posteriors: Dictionary of posterior distributions
@@ -245,7 +247,7 @@ class ProUNet(nn.Module):
 
         Args:
             predictions: Model predictions [B, num_classes, H, W]
-            labels: Ground truth segmentation [B, num_classes, H, W]
+            labels: Ground truth segmentation class indices [B, 1, H, W]
 
         Returns:
             Tuple of (mean_iou, class_ious, l1_calibration, l2_calibration,
@@ -257,8 +259,8 @@ class ProUNet(nn.Module):
         miou, ious = multiclass_iou(predictions, labels, class_indices)
         confusion_matrix = BatchImageConfusionMatrix(predictions, labels, class_indices)
 
-        # Convert one-hot labels to class indices for calibration metrics
-        target_indices = torch.argmax(labels, dim=1)
+        # Convert class indices from [B, 1, H, W] to [B, H, W]
+        target_indices = torch.squeeze(labels, dim=1).long()
 
         l1_calibration = multiclass_calibration_error(
             preds=predictions,
@@ -312,7 +314,7 @@ class ProUNet(nn.Module):
         """Compute total loss and evaluation metrics.
 
         Args:
-            targets: Ground truth segmentation [B, num_classes, H, W]
+            targets: Ground truth segmentation class indices [B, 1, H, W]
             predictions: Model predictions [B, num_classes, H, W]
             priors: Dictionary of prior distributions
             posteriors: Dictionary of posterior distributions

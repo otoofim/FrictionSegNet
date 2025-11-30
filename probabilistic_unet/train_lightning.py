@@ -161,7 +161,7 @@ class ProbabilisticUNetLightning(pl.LightningModule):
 
         # Convert predictions and labels for metric computation
         pred_classes = torch.argmax(predictions, dim=1)
-        label_classes = torch.argmax(labels, dim=1)
+        label_classes = torch.squeeze(labels, dim=1).long()
         self.train_miou(pred_classes, label_classes)
 
         # Additional quality metrics
@@ -169,7 +169,9 @@ class ProbabilisticUNetLightning(pl.LightningModule):
             nll = F.nll_loss(
                 F.log_softmax(predictions, dim=1), label_classes, reduction="mean"
             )
-            brier = torch.mean((predictions - labels) ** 2)
+            # Convert labels to one-hot for brier score computation
+            labels_one_hot = F.one_hot(label_classes, num_classes=predictions.shape[1]).permute(0, 3, 1, 2).float()
+            brier = torch.mean((predictions - labels_one_hot) ** 2)
 
             self.train_nll(nll)
             self.train_brier(brier)
@@ -250,7 +252,7 @@ class ProbabilisticUNetLightning(pl.LightningModule):
 
         # Convert to class indices
         pred_classes = torch.argmax(mean_prediction, dim=1)
-        label_classes = torch.argmax(labels, dim=1)
+        label_classes = torch.squeeze(labels, dim=1).long()
 
         self.val_miou(pred_classes, label_classes)
         self.val_iou_per_class(pred_classes, label_classes)
@@ -262,7 +264,9 @@ class ProbabilisticUNetLightning(pl.LightningModule):
         nll = F.nll_loss(
             F.log_softmax(mean_prediction, dim=1), label_classes, reduction="mean"
         )
-        brier = torch.mean((mean_prediction - labels) ** 2)
+        # Convert labels to one-hot for brier score computation
+        labels_one_hot = F.one_hot(label_classes, num_classes=mean_prediction.shape[1]).permute(0, 3, 1, 2).float()
+        brier = torch.mean((mean_prediction - labels_one_hot) ** 2)
 
         self.val_nll(nll)
         self.val_brier(brier)
@@ -328,7 +332,8 @@ class ProbabilisticUNetLightning(pl.LightningModule):
         for i in range(num_vis):
             # Convert to numpy for visualization
             img = images[i].cpu()
-            label = torch.argmax(labels[i], dim=0).cpu()
+            # labels is now [B, 1, H, W] with class indices, squeeze to [H, W]
+            label = torch.squeeze(labels[i], dim=0).cpu().long()
             pred = torch.argmax(predictions[i], dim=0).cpu()
 
             # Log as WandB image with masks

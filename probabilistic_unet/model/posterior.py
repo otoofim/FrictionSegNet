@@ -24,9 +24,9 @@ class Posterior(nn.Module):
         self.num_samples = num_samples
         self.num_classes = num_classes
 
-        # Calculate input dimension (RGB + segmentation mask)
+        # Calculate input dimension (RGB + class index channel)
         if input_dim is None:
-            input_dim = 3 + num_classes
+            input_dim = 4  # 3 RGB channels + 1 class index channel
 
         # Architecture
         self.down_blocks = nn.ModuleList(
