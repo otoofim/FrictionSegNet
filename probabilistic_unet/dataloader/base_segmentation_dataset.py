@@ -43,18 +43,14 @@ def prepare_aug_funcs(img_size: Tuple[int, int]) -> Dict[str, Dict[str, T.Compos
         return {
             "image": T.Compose(
                 [
-                    T.ToTensor(),
                     *img_tfms,
                     T.Resize(img_size),
-                    T.ToPILImage(),
                 ]
             ),
             "mask": T.Compose(
                 [
-                    T.ToTensor(),
                     *mask_tfms,
                     T.Resize(img_size),
-                    T.ToPILImage(),
                 ]
             ),
         }
@@ -85,16 +81,12 @@ def prepare_aug_funcs(img_size: Tuple[int, int]) -> Dict[str, Dict[str, T.Compos
             "image": T.Compose(
                 [
                     T.AugMix(severity=10, mixture_width=10),
-                    T.ToTensor(),
                     T.Resize(img_size),
-                    T.ToPILImage(),
                 ]
             ),
             "mask": T.Compose(
                 [
-                    T.ToTensor(),
                     T.Resize(img_size),
-                    T.ToPILImage(),
                 ]
             ),
         },
@@ -102,19 +94,15 @@ def prepare_aug_funcs(img_size: Tuple[int, int]) -> Dict[str, Dict[str, T.Compos
         "erasing": {
             "image": T.Compose(
                 [
-                    T.ToTensor(),
+                    T.Resize(img_size),
                     T.RandomErasing(
                         p=1.0, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0
                     ),
-                    T.Resize(img_size),
-                    T.ToPILImage(),
                 ]
             ),
             "mask": T.Compose(
                 [
-                    T.ToTensor(),
                     T.Resize(img_size),
-                    T.ToPILImage(),
                 ]
             ),
         },
@@ -260,15 +248,15 @@ class BaseSegmentationDataset(Dataset, ABC):
         aug_key = list(self.augmenters.keys())[idx % len(self.augmenters)]
         aug = self.augmenters[aug_key]
 
-        # Load image and mask
+        # Load image and mask (as PIL images)
         img = self._load_image(img_idx)
         mask = self._load_mask(img_idx)
 
-        # Apply augmentation
+        # Apply augmentation (works on PIL images, returns PIL images)
         img = aug["image"](img)
         mask = aug["mask"](mask)
 
-        # Convert to tensors
+        # Convert PIL images to tensors
         img_tensor = T.ToTensor()(img)
         mask_tensor = T.ToTensor()(mask).long()
 
