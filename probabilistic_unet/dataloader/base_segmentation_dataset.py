@@ -23,6 +23,47 @@ import matplotlib.pyplot as plt
 from abc import ABC, abstractmethod
 
 
+class ToTensorAsUint8(object):
+    """Convert PIL Image to tensor while preserving uint8 dtype for transforms that need it."""
+    def __call__(self, pic):
+        if isinstance(pic, np.ndarray):
+            arr = pic
+        else:
+            arr = np.array(pic)
+        # Keep as uint8 instead of converting to float
+        return torch.from_numpy(arr).permute(2, 0, 1) if len(arr.shape) == 3 else torch.from_numpy(arr).unsqueeze(0)
+
+
+class SafeAugMix(object):
+    """Wrapper for AugMix that handles PIL image input."""
+    def __init__(self, severity=10, mixture_width=10):
+        self.augmix = T.AugMix(severity=severity, mixture_width=mixture_width)
+    
+    def __call__(self, img):
+        if isinstance(img, Image.Image):
+            # Convert to tensor (uint8), apply AugMix, then back to PIL
+            img_uint8 = torch.from_numpy(np.array(img)).permute(2, 0, 1)
+            result = self.augmix(img_uint8)
+            # Convert back to PIL for consistency
+            return T.ToPILImage()(result)
+        return self.augmix(img)
+
+
+class SafeElasticTransform(object):
+    """Wrapper for ElasticTransform that handles PIL image input."""
+    def __init__(self, alpha=500.0):
+        self.elastic = T.ElasticTransform(alpha=alpha)
+    
+    def __call__(self, img):
+        if isinstance(img, Image.Image):
+            # Convert to tensor, apply ElasticTransform, then back to PIL
+            img_tensor = T.ToTensor()(img)
+            result = self.elastic(img_tensor)
+            # Convert back to PIL for consistency
+            return T.ToPILImage()(result.clamp(0, 1))
+        return self.elastic(img)
+
+
 def prepare_aug_funcs(img_size: Tuple[int, int]) -> Dict[str, Dict[str, T.Compose]]:
     """
     Prepares a dictionary of torchvision augmentation pipelines.
@@ -72,29 +113,17 @@ def prepare_aug_funcs(img_size: Tuple[int, int]) -> Dict[str, Dict[str, T.Compos
             mask_tfms=[T.RandomRotation(degrees=30)],
         ),
         "elastic": base(
-            img_tfms=[T.ElasticTransform(alpha=500.0)],
-            mask_tfms=[T.ElasticTransform(alpha=500.0)],
+            img_tfms=[SafeElasticTransform(alpha=500.0)],
         ),
         "invert": base(img_tfms=[T.RandomInvert(p=1.0)]),
         "solarize": base(img_tfms=[T.RandomSolarize(threshold=0.05, p=1.0)]),
-        "augMix": {
-            "image": T.Compose(
-                [
-                    T.AugMix(severity=10, mixture_width=10),
-                    T.Resize(img_size),
-                ]
-            ),
-            "mask": T.Compose(
-                [
-                    T.Resize(img_size),
-                ]
-            ),
-        },
+        "augMix": base(img_tfms=[SafeAugMix(severity=10, mixture_width=10)]),
         "posterize": base(img_tfms=[T.RandomPosterize(bits=2, p=1.0)]),
         "erasing": {
             "image": T.Compose(
                 [
                     T.Resize(img_size),
+                    T.ToTensor(),
                     T.RandomErasing(
                         p=1.0, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0
                     ),
@@ -252,13 +281,20 @@ class BaseSegmentationDataset(Dataset, ABC):
         img = self._load_image(img_idx)
         mask = self._load_mask(img_idx)
 
-        # Apply augmentation (works on PIL images, returns PIL images)
+        # Apply augmentation (some return PIL, some return tensors)
         img = aug["image"](img)
         mask = aug["mask"](mask)
 
-        # Convert PIL images to tensors
-        img_tensor = T.ToTensor()(img)
-        mask_tensor = T.ToTensor()(mask).long()
+        # Ensure we have tensors - convert if still PIL
+        if isinstance(img, Image.Image):
+            img_tensor = T.ToTensor()(img)
+        else:
+            img_tensor = img
+        
+        if isinstance(mask, Image.Image):
+            mask_tensor = T.ToTensor()(mask).long()
+        else:
+            mask_tensor = mask.long() if not mask.dtype == torch.long else mask
 
         return {
             "image": img_tensor.float(),
